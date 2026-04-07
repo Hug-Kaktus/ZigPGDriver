@@ -2,6 +2,18 @@ const std = @import("std");
 const Connection = @import("connection.zig").Connection;
 const helpers = @import("helpers.zig");
 const buildMessage = helpers.buildMessage;
+const types = @import("types.zig");
+const query_file = @import("query.zig");
+const parseFieldData = query_file.parseFieldData;
+const parseRowData = query_file.parseRowData;
+
+const PgType = types.PgType;
+const oidToType = types.oidToType;
+const Value = types.Value;
+const convertValue = types.convertValue;
+const FieldData = types.FieldData;
+const Row = types.Row;
+const QueryResult = types.QueryResult;
 
 pub fn parse(
         self: *Connection,
@@ -69,7 +81,21 @@ pub fn bind(
     result_column_format_codes: std.ArrayList(i16),
 ) !void {
     try self.writer.interface.writeByte('B');
-    try self.writer.interface.writeInt(i32, 235423, .big);
+    const len = 4 +
+    destination_portal.len + 1 +
+    source_prepared_statement.len + 1 +
+    2 + parameter_format_codes.items.len * 2 +
+    2 +
+    blk: {
+        var sum: i32 = 0;
+        for (parameter_values.items) |v| {
+            sum += 4 + v.length;
+        }
+        break :blk sum;
+    } +
+    2 + result_column_format_codes.items.len * 2;
+
+    try self.writer.interface.writeInt(i32, len, .big);
     try self.writer.interface.write(destination_portal);
     try self.writer.interface.writeByte(0);
     try self.writer.interface.write(source_prepared_statement);
@@ -80,7 +106,7 @@ pub fn bind(
     }
     try self.writer.interface.writeInt(i16, @intCast(parameter_values.items.len), .big);
     for (parameter_values) |value| {
-        try self.writer.interface.writeInt(i16, @intCast(value.length), .big);
+        try self.writer.interface.writeInt(i32, @intCast(value.length), .big);
         try self.writer.interface.write(value.value);
     }
     self.writer.interface.writeInt(i16, @intCast(result_column_format_codes.items.len), .big);
@@ -164,10 +190,100 @@ pub fn describe(self: *Connection, object_type: u8, name: []const u8) !void {
     }
 }
 
+pub fn prepare(
+    self: *Connection,
+    name: []const u8,
+    sql: []const u8,
+) !void {
+    var empty = std.ArrayList(i32).initCapacity(self.allocator, 8);
+    defer empty.deinit();
+
+    try parse(self, name, sql, empty);
+}
+
+pub fn execPrepared(
+    self: *Connection,
+    statement_name: []const u8,
+    params: []ParameterValue,
+) !QueryResult {
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    const a = arena.allocator();
+
+    var fields: ?std.ArrayList(FieldData) = null;
+    var rows = std.ArrayList(Row).init(a);
+
+    var param_formats = std.ArrayList(i16).init(a);
+    var param_values = std.ArrayList(ParameterValue).init(a);
+
+    for (params) |p| {
+        try param_formats.append(0);
+        try param_values.append(p);
+    }
+
+    var result_formats = std.ArrayList(i16).init(a);
+    try result_formats.append(0);
+
+    try bind(
+        self,
+        "",
+        statement_name,
+        param_formats,
+        param_values,
+        result_formats,
+    );
+
+    try execute(self, "", 0);
+
+    try sync(self);
+
+    var reader = self.reader.interface();
+
+    while (true) {
+        const msg_type = try reader.takeByte();
+        _ = try reader.takeInt(i32, .big);
+
+        switch (msg_type) {
+            'T' => {
+                fields = try parseFieldData(self, a);
+            },
+            'D' => {
+                const row = try parseRowData(self, a, fields.?.items);
+                try rows.append(row);
+            },
+            'C' => {
+                _ = try reader.takeDelimiter(0);
+            },
+            'Z' => {
+                _ = try reader.takeByte();
+                break;
+            },
+            'E' => {
+                const err = try buildMessage(a, reader);
+                std.debug.print("{s}\n", .{err.items});
+                return error.ServerError;
+            },
+            else => {},
+        }
+    }
+
+    return QueryResult{
+        .arena = arena,
+        .fields = fields.?.items,
+        .rows = rows.items,
+    };
+}
+
 pub fn cancel(self: *Connection, process_id: i32, secret_key: []const u8) !void {
-    self.writer.interface.writeInt(i32, 8 + @as(i32, @intCast(secret_key.len)), .big);
-    self.writer.interface.writeInt(i32, 80877102, .big);
-    self.writer.interface.writeInt(i32, process_id, .big);
-    self.writer.interface.writeAll(secret_key);
-    self.writer.interface.flush();
+    try self.writer.interface.writeInt(i32, 8 + @as(i32, @intCast(secret_key.len)), .big);
+    try self.writer.interface.writeInt(i32, 80877102, .big);
+    try self.writer.interface.writeInt(i32, process_id, .big);
+    try self.writer.interface.writeAll(secret_key);
+    try self.writer.interface.flush();
+}
+
+pub fn terminate(self: *Connection,) !void {
+    try self.writer.interface.writeByte('X');
+    try self.writer.interface.writeInt(i32, 4, .big);
+    try self.writer.interface.flush();
+    self.close();
 }

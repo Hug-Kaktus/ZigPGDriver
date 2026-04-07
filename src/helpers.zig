@@ -1,4 +1,5 @@
 const std = @import("std");
+const Connection = @import("connection.zig").Connection;
 
 /// Builds human readable message from server's ErrorResponse or NoticeResponse messages
 pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(u8) {
@@ -39,27 +40,56 @@ pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.A
     return message;
 }
 
-pub fn parseKeyValuePayload(payload: []const u8) !std.StringHashMap([]const u8) {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    var parameters = std.StringHashMap([]const u8).init(allocator);
-    var i: u16 = 0;
-    var j: u16 = 0;
-    var is_key = true;
-    var key: []const u8 = undefined;
-    while (true) {
-        if (payload[i] != 0) {
-            i += 1;
-        } else {
-            if (is_key) {
-                key = payload[j..i];
+pub fn parseKeyValuePayload(self: *Connection) !void {
+    const key = (try self.reader.interface().takeDelimiter(0)).?;
+    const value = (try self.reader.interface().takeDelimiter(0)).?;
+    switch (key.len) {
+        8 => {
+            self.backend_key_data.TimeZone = value;
+        },
+        9 => {
+            self.backend_key_data.DateStyle = value;
+        },
+        11 => {
+            self.backend_key_data.search_path = value;
+        },
+        12 => {
+            self.backend_key_data.is_superuser = value;
+        },
+        13 => {
+            self.backend_key_data.IntervalStyle = value;
+        },
+        14 => {
+            self.backend_key_data.in_hot_standby = value;
+        },
+        15 => {
+            if (std.mem.eql(u8, "client_encoding", value)) {
+                self.backend_key_data.client_encoding = value;
             } else {
-                try parameters.put(key, payload[j..i]);
+                self.backend_key_data.server_encoding = value;
             }
-            is_key = !is_key;
-            i += 1;
-            j = i;
+        },
+        16 => {
+            if (std.mem.eql(u8, "application_name", value)) {
+                self.backend_key_data.application_name = value;
+            } else {
+                self.backend_key_data.scram_iterations = value;
+            }
+        },
+        17 => {
+            self.backend_key_data.integer_datetimes = value;
+        },
+        21 => {
+            self.backend_key_data.session_authorization = value;
+        },
+        27 => {
+            self.backend_key_data.standard_conforming_strings = value;
+        },
+        29 => {
+            self.backend_key_data.default_transaction_read_only = value;
+        },
+        else => {
+            std.debug.print("Unknown backend key parameter \"{s}\" is ignored.", .{value});
         }
-        if (i >= payload.len) return parameters;
     }
 }
