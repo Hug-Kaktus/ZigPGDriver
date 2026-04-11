@@ -37,17 +37,16 @@ pub fn startup(
 
             switch (msg_type) {
                 'K' => {
-                    const process_id: i32 = try self.reader.interface().takeInt(i32, .big);
-                    var secret_key: [256]u8 = undefined;
-                    _ = try self.reader.interface().readSliceShort(secret_key[0 .. payload_len - 4]);
-                    std.debug.print("process_id: {d}, secret_key: {x}\n", .{ process_id, secret_key[0 .. payload_len - 4] });
+                    self.process_id = try self.reader.interface().takeInt(i32, .big);
+                    self.secret_key_len = @as(i32, @intCast(payload_len)) - 4;
+                    _ = try self.reader.interface().readSliceShort(self.secret_key[0 .. payload_len - 4]);
                 },
                 'R' => {
                     try authenticate(self, @intCast(payload_len), password);
                 },
                 'Z' => {
-                    const transaction_status: u8 = try self.reader.interface().takeByte();
-                    std.debug.print("transaction_status: {c}\n", .{transaction_status});
+                    // transaction_status
+                    _ = try self.reader.interface().takeByte();
                     return;
                 },
                 'S' => {
@@ -65,5 +64,4 @@ pub fn startup(
                 else => std.debug.print("Unknown msg: {c}\n", .{msg_type}),
             }
         }
-        std.debug.print("backend_key_data: {any}\n", .{self.backend_key_data});
     }

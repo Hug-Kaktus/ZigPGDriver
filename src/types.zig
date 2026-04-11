@@ -8,6 +8,12 @@ pub const FieldData = struct {
     data_type_size: i16,
     format_code: i16,
     column_attribute_number: i16,
+
+    pub fn show(self: *const FieldData) void {
+        std.debug.print("Field \"{s}\"\n", .{self.name});
+        std.debug.print("    Data type: {s}\n", .{@tagName(oidToType(self.data_type_object_id))});
+        std.debug.print("    Format: {s}\n", .{if (self.format_code == 0) "text" else "binary"});
+    }
 };
 
 pub const Value = union(enum) {
@@ -30,7 +36,7 @@ pub const PgType = enum {
     Unknown,
 };
 
-fn oidToType(oid: i32) PgType {
+pub fn oidToType(oid: i32) PgType {
     return switch (oid) {
         23 => .Int4,
         20 => .Int8,
@@ -42,7 +48,7 @@ fn oidToType(oid: i32) PgType {
     };
 }
 
-fn convertValue(comptime T: type, v: Value) !T {
+pub fn convertValue(comptime T: type, v: Value) !T {
     return switch (@typeInfo(T)) {
         .int => |ti| switch (v) {
             .Int4 => |x| {

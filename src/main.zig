@@ -4,8 +4,12 @@ const query = @import("query.zig");
 const queryWithFields = query.queryWithFields;
 const queryTyped = query.queryTyped;
 const extended_query = @import("extended_query.zig");
-const parse = extended_query.parse;
-const bind = extended_query.bind;
+const queryExt = extended_query.queryExt;
+const prepare = extended_query.prepare;
+const bindPreparedStatement = extended_query.bindPreparedStatement;
+const executeQuery = extended_query.executeQuery;
+const executeQueryTyped = extended_query.executeQueryTyped;
+const ParameterValue = extended_query.ParameterValue;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -22,10 +26,47 @@ pub fn main() !void {
     );
     defer conn.close();
 
-    // var params = try std.ArrayList(i32).initCapacity(allocator, 0);
-    // defer params.deinit(allocator);
-    // try parse(&conn, "test_query", "SELECT 1;", params);
-    // try bind(&conn, "test_query", "SELECT 1;", , parameter_values: Aligned(ParameterValue), result_column_format_codes: Aligned(i16))
+    
+    const Employee = struct {
+        employee_id: i32,
+        first_name: []const u8,
+        last_name: []const u8,
+    };
+
+
+    var param_types = try std.ArrayList(i32).initCapacity(conn.allocator, 4);
+    try param_types.append(conn.allocator, 0);
+    const prepared_statement = try prepare(
+        &conn,
+        "test", "SELECT employee_id, first_name, last_name FROM employee WHERE employee_id = $1",
+        &param_types
+    );
+    var parameter_format_codes = try std.ArrayList(i16).initCapacity(conn.allocator, 1);
+    try parameter_format_codes.append(conn.allocator, 0);
+    var values = try std.ArrayList(ParameterValue).initCapacity(conn.allocator, 1);
+    try values.append(conn.allocator, ParameterValue{.length = 1, .value = "1"});
+    var result_format_codes = try std.ArrayList(i16).initCapacity(conn.allocator, 1);
+    try result_format_codes.append(conn.allocator, 0);
+    const binded_prepared_statement = try bindPreparedStatement(&conn,
+        "test_portal_name",
+        &prepared_statement,
+        parameter_format_codes,
+        values,
+        result_format_codes
+    );
+
+    const employees = try executeQueryTyped(&conn, Employee, &binded_prepared_statement, 0);
+    for (employees.items) |e| {
+        std.debug.print("{d} {s} {s}\n", .{e.employee_id, e.first_name, e.last_name});
+    }
+
+    // const query_result = try executeQuery(&conn, &binded_prepared_statement, 0);
+    // for (query_result.rows.items) |row| {
+    //     const id = try row.getAs(i32, query_result.fields.items, "employee_id");
+    //     const first_name = try row.getAs([]const u8, query_result.fields.items, "first_name");
+    //     std.debug.print("{d} {s}\n", .{id, first_name});
+    // }
+    //
 
     // _ = try queryWithFields(&conn,
     // \\CREATE TABLE employee (
@@ -34,6 +75,7 @@ pub fn main() !void {
     // \\last_name VARCHAR(50) NOT NULL
     // \\);
     // );
+    // _ = try queryWithFields(&conn, "DROP TABLE employee;");
 
     // _ = try queryWithFields(&conn,
     // \\INSERT INTO employee (first_name, last_name)
@@ -55,15 +97,23 @@ pub fn main() !void {
     //     std.debug.print("{} {s} {s}\n", .{id, first_name, last_name});
     // }
 
-    const Employee = struct {
-        employee_id: i32,
-        first_name: []const u8,
-        last_name: []const u8,
-    };
+    // const employees = try queryTyped(&conn, Employee, "SELECT employee_id, first_name, last_name FROM employee");
 
-    const employees = try queryTyped(&conn, Employee, "SELECT employee_id, first_name, last_name FROM employee");
+    // for (employees.items) |e| {
+    //     std.debug.print("{d} {s} {s}\n", .{e.employee_id, e.first_name, e.last_name});
+    // }
 
-    for (employees.items) |e| {
-        std.debug.print("{d} {s} {s}\n", .{e.employee_id, e.first_name, e.last_name});
-    }
+    // const result = try queryExt(
+    //     &conn,
+    //     "SELECT employee_id, first_name FROM employee WHERE employee_id = $1",
+    //     @constCast(&[_]ParameterValue{
+    //         .{ .length = 1, .value = "1" },
+    //     }),
+    // );
+    // for (result.rows.items) |row| {
+    //     const id = try row.getAs(i32, result.fields.items, "employee_id");
+    //     const first_name = try row.getAs([]const u8, result.fields.items, "first_name");
+
+    //     std.debug.print("{} {s}\n", .{id, first_name});
+    // }
 }

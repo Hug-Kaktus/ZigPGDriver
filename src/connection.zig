@@ -4,21 +4,21 @@ const buildMessage = helpers.buildMessage;
 const startup = @import("startup.zig").startup;
 
 const BackendKeyData = struct {
-    in_hot_standby: []const u8, // 14
-    integer_datetimes: []const u8, // 17
-    TimeZone: []const u8, // 8
-    IntervalStyle: []const u8, // 13
-    search_path: []const u8, // 11
-    is_superuser: []const u8, // 12
-    application_name: []const u8, // 16
-    default_transaction_read_only: []const u8, // 29
-    scram_iterations: []const u8, // 16
-    DateStyle: []const u8, // 9
-    standard_conforming_strings: []const u8, // 27
-    session_authorization: []const u8, // 21
-    client_encoding: []const u8, // 15
-    server_version: []const u8, // 14
-    server_encoding: []const u8, // 15
+    in_hot_standby: []const u8,
+    integer_datetimes: []const u8,
+    TimeZone: []const u8,
+    IntervalStyle: []const u8,
+    search_path: []const u8,
+    is_superuser: []const u8,
+    application_name: []const u8,
+    default_transaction_read_only: []const u8,
+    scram_iterations: []const u8,
+    DateStyle: []const u8,
+    standard_conforming_strings: []const u8,
+    session_authorization: []const u8,
+    client_encoding: []const u8,
+    server_version: []const u8,
+    server_encoding: []const u8,
 };
 
 pub const Connection = struct {
@@ -30,7 +30,8 @@ pub const Connection = struct {
     writer: std.net.Stream.Writer,
 
     process_id: i32,
-    secret_key: []const u8,
+    secret_key_len: i32,
+    secret_key: [256]u8,
     backend_key_data: BackendKeyData,
 
     pub fn connect(
@@ -54,6 +55,7 @@ pub const Connection = struct {
             .reader = undefined,
             .writer = undefined,
             .process_id = undefined,
+            .secret_key_len = undefined,
             .secret_key = undefined,
             .backend_key_data = undefined,
         };

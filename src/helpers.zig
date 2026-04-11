@@ -4,9 +4,7 @@ const Connection = @import("connection.zig").Connection;
 /// Builds human readable message from server's ErrorResponse or NoticeResponse messages
 pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(u8) {
     var field_type: u8 = undefined;
-    std.debug.print("buildMessage>before allocation> reader.buffer: {any}\n", .{reader.buffer});
     var message = try std.ArrayList(u8).initCapacity(allocator, 128);
-    std.debug.print("buildMessage>after allocation> reader.buffer: {any}\n", .{reader.buffer});
     while (true) {
         field_type = try reader.takeByte();
         switch (field_type) {
