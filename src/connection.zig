@@ -2,6 +2,8 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const buildMessage = helpers.buildMessage;
 const startup = @import("startup.zig").startup;
+const types = @import("types.zig");
+const PendingQuery = types.PendingQuery;
 
 const BackendKeyData = struct {
     in_hot_standby: []const u8,
@@ -28,6 +30,7 @@ pub const Connection = struct {
     wbuf: [4096]u8,
     reader: std.net.Stream.Reader,
     writer: std.net.Stream.Writer,
+    pending: std.ArrayList(PendingQuery),
 
     process_id: i32,
     secret_key_len: i32,
@@ -54,6 +57,7 @@ pub const Connection = struct {
             .wbuf = undefined,
             .reader = undefined,
             .writer = undefined,
+            .pending = try std.ArrayList(PendingQuery).initCapacity(allocator, 8),
             .process_id = undefined,
             .secret_key_len = undefined,
             .secret_key = undefined,

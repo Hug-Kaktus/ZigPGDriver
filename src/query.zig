@@ -160,7 +160,6 @@ pub fn queryWithFields(self: *Connection, sql: []const u8) !QueryResult {
     while (true) {
         const msg_type = try self.reader.interface().takeByte();
         _ = try self.reader.interface().takeInt(i32, .big);
-        std.debug.print("msg_type: {c}\n", .{msg_type});
         switch (msg_type) {
             'T' => {
                 fields = try parseFieldData(self);
@@ -204,6 +203,7 @@ pub fn queryWithFields(self: *Connection, sql: []const u8) !QueryResult {
             },
             else => {
                 std.debug.print("Unsupported message type {c}\n", .{msg_type});
+                return error.UnknownMessageType;
             },
         }
     }
@@ -214,7 +214,7 @@ pub fn queryTyped(
     comptime T: type,
     sql: []const u8,
 ) !std.ArrayList(T) {
-    const result = try queryWithFields(self, sql);
+    var result = try queryWithFields(self, sql);
     defer result.deinit();
 
     var out = try std.ArrayList(T).initCapacity(self.allocator, 128);

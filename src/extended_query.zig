@@ -15,51 +15,10 @@ const convertValue = types.convertValue;
 const FieldData = types.FieldData;
 const Row = types.Row;
 const QueryResult = types.QueryResult;
+const PreparedStatement = types.PreparedStatement;
+const BindedPreparedStatement = types.BindedPreparedStatement;
+const PendingQuery = types.PendingQuery;
 
-const PreparedStatement = struct {
-    name: []const u8,
-    fields: std.ArrayList(FieldData),
-    parameter_count: i32,
-    parameters: std.ArrayList(i32),
-
-    pub fn show(self: *const PreparedStatement) void {
-        std.debug.print("Prepared statement \"{s}\"\n", .{self.name});
-        std.debug.print("Fields:\n", .{});
-        for (self.fields.items) |field| {
-            field.show();
-        }
-        std.debug.print("Parameter count: {d}\n", .{self.parameter_count});
-        std.debug.print("Parameters:\n", .{});
-        for (self.parameters.items, 1..) |parameter, i| {
-            std.debug.print("{d}. {s}\n", .{i, @tagName(oidToType(parameter))});
-        }
-    }
-};
-
-const BindedPreparedStatement = struct {
-    prepared_statement: *const PreparedStatement,
-    portal_name: []const u8,
-
-    pub fn show(self: *const BindedPreparedStatement) void {
-        self.prepared_statement.show();
-        std.debug.print("Portal name: {s}\n", .{self.portal_name});
-    }
-};
-
-const QueryState = enum {
-    pending,
-    done,
-    failed,
-    skipped,
-};
-
-const PendingQuery = struct {
-    arena: std.heap.ArenaAllocator,
-    prepared_statement: PreparedStatement,
-    rows: std.ArrayList(Row),
-    state: QueryState,
-    error_message: ?[]u8,
-};
 
 pub fn parseMsg(
         self: *Connection,
@@ -182,7 +141,10 @@ pub fn bindPreparedStatement(
                 const notice_message = try buildMessage(self.allocator, self.reader.interface());
                 std.debug.print("{s}\n", .{notice_message.items});
             },
-            else => std.debug.print("Unknown msg: {c}\n", .{msg_type}),
+            else => {
+                std.debug.print("Unknown msg: {c}\n", .{msg_type});
+                return error.UnknownMessageType;
+            },
         }
     }
 }
@@ -225,7 +187,10 @@ pub fn close(self: *Connection, object_type: u8, name: []const u8,) !void {
             const notice_message = try buildMessage(self.allocator, self.reader.interface());
             std.debug.print("{s}\n", .{notice_message.items});
         },
-        else => std.debug.print("Unknown msg: {c}\n", .{msg_type}),
+        else => {
+            std.debug.print("Unknown msg: {c}\n", .{msg_type});
+            return error.UnknownMessageType;
+        },
     }
 }
 
@@ -362,6 +327,87 @@ pub fn executeQueryTyped(
         try out.append(self.allocator, obj);
     }
     return out;
+}
+
+pub fn sendStatement(self: *Connection, prepared_statement: PreparedStatement, params: std.ArrayList(ParameterValue)) !void {
+    try bindMsg(
+        self,
+        "",
+        prepared_statement.name,
+        std.ArrayList(i32).initCapacity(self.allocator, 0),
+        params,
+        std.ArrayList(i16).initCapacity(self.allocator, 0)
+    );
+    try executeMsg(self, "", 0);
+}
+
+pub fn flushPipeline(self: *Connection) !void {
+    try sync(self);
+}
+
+pub fn readPipeline(self: *Connection) !void {
+    var reader = self.reader.interface();
+    var current_query_index = 0;
+    var in_error_recovery = false;
+    while (current_query_index < self.pending.items.len) {
+        const msg_type = try reader.takeByte();
+        const msg_len = try reader.takeInt(i32, .big);
+
+        if (in_error_recovery) {
+            if (msg_type == 'Z') {
+                _ = try reader.takeByte();
+                for (self.pending.items[current_query_index..]) |*q| {
+                    if (q.state == .pending) {
+                        q.state = .skipped;
+                    }
+                }
+                break;
+            } else {
+                try reader.take(msg_len-4);
+                continue;
+            }
+        }
+
+        var current = &self.pending.items[current_query_index];
+        switch (msg_type) {
+            '1' => try reader.take(msg_len-4),
+            '2' => try reader.take(msg_len-4),
+            'D' => {
+                if (current.prepared_statement.fields) |f| {
+                    const row = try parseRowData(self, f.items);
+                    try current.rows.append(self.allocator, row);
+                } else {
+                    return error.ProtocolError;
+                }
+            },
+            'C' => {
+                try reader.take(msg_len-4);
+                current.state = .done;
+            },
+            'Z' => {
+                _ = try reader.takeByte();
+                if (current.state == .pending) {
+                    current.state = .done;
+                }
+                current_query_index += 1;
+            },
+            'E' => {
+                const err = try buildMessage(self.allocator, reader);
+                std.debug.print("{s}\n", .{err.items});
+                current.error_message = err.items;
+                current.state = .failed;
+                in_error_recovery = true;
+            },
+            'N' => {
+                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                std.debug.print("{s}\n", .{notice_message.items});
+            },
+            else => {
+                std.debug.print("Unknown msg type: {c}\n", .{msg_type});
+                return error.UnknownMessageType;
+            },
+        }
+    }
 }
 
 pub fn cancel(self: *Connection, process_id: i32, secret_key: []const u8) !void {

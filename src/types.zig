@@ -111,3 +111,49 @@ pub const QueryResult = struct {
         self.arena.deinit();
     }
 };
+
+const PreparedStatement = struct {
+    name: []const u8,
+    fields: std.ArrayList(FieldData),
+    parameter_count: i32,
+    parameters: std.ArrayList(i32),
+
+    pub fn show(self: *const PreparedStatement) void {
+        std.debug.print("Prepared statement \"{s}\"\n", .{self.name});
+        std.debug.print("Fields:\n", .{});
+        for (self.fields.items) |field| {
+            field.show();
+        }
+        std.debug.print("Parameter count: {d}\n", .{self.parameter_count});
+        std.debug.print("Parameters:\n", .{});
+        for (self.parameters.items, 1..) |parameter, i| {
+            std.debug.print("{d}. {s}\n", .{i, @tagName(oidToType(parameter))});
+        }
+    }
+};
+
+const BindedPreparedStatement = struct {
+    prepared_statement: *const PreparedStatement,
+    portal_name: []const u8,
+
+    pub fn show(self: *const BindedPreparedStatement) void {
+        self.prepared_statement.show();
+        std.debug.print("Portal name: {s}\n", .{self.portal_name});
+    }
+};
+
+const QueryState = enum {
+    pending,
+    done,
+    failed,
+    skipped,
+};
+
+pub const PendingQuery = struct {
+    arena: std.heap.ArenaAllocator,
+    prepared_statement: PreparedStatement,
+    rows: std.ArrayList(Row),
+    state: QueryState,
+    error_message: ?[]u8,
+};
+
