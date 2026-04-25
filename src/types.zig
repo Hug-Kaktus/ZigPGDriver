@@ -157,3 +157,16 @@ pub const PendingQuery = struct {
     error_message: ?[]u8,
 };
 
+pub const Data = struct {
+    name: []const u8,
+    setting: []const u8,
+    source: []const u8,
+    sourcefile: []const u8,
+
+    pub fn show(self: *const Data) void {
+        std.debug.print("name: {s}\n", .{self.name});
+        std.debug.print("setting: {s}\n", .{self.setting});
+        std.debug.print("source: {s}\n", .{self.source});
+        std.debug.print("sourcefile: {s}\n", .{self.sourcefile});
+    }
+};

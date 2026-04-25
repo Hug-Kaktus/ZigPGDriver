@@ -147,6 +147,7 @@ pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
 }
 
 pub fn queryWithFields(self: *Connection, sql: []const u8) !QueryResult {
+    std.debug.print("sql:\n{s}\n", .{sql});
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     const a = arena.allocator();
     try self.writer.interface.writeByte('Q');
@@ -214,6 +215,7 @@ pub fn queryTyped(
     comptime T: type,
     sql: []const u8,
 ) !std.ArrayList(T) {
+    std.debug.print("sql:\n{s}\n", .{sql});
     var result = try queryWithFields(self, sql);
     defer result.deinit();
 
