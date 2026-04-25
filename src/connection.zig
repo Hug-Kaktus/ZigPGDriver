@@ -37,6 +37,8 @@ pub const Connection = struct {
     secret_key: [256]u8,
     backend_key_data: BackendKeyData,
 
+    streaming_enabled: bool,
+
     pub fn connect(
         allocator: std.mem.Allocator,
         host: []const u8,
@@ -58,10 +60,13 @@ pub const Connection = struct {
             .reader = undefined,
             .writer = undefined,
             .pending = try std.ArrayList(PendingQuery).initCapacity(allocator, 8),
+
             .process_id = undefined,
             .secret_key_len = undefined,
             .secret_key = undefined,
             .backend_key_data = undefined,
+
+            .streaming_enabled = false,
         };
         connection.reader = stream.reader(&connection.rbuf);
         connection.writer = stream.writer(&connection.wbuf);

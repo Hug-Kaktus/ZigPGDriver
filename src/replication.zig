@@ -7,6 +7,7 @@ const queryTyped = query.queryTyped;
 const queryWithFields = query.queryWithFields;
 const extended_query = @import("extended_query.zig");
 const ParameterValue = extended_query.ParameterValue;
+const fs = std.fs;
 
 pub const Lsn = struct {
     value: u64,
@@ -282,10 +283,6 @@ pub fn readReplicationSlot(self: *Connection, slot_name: []const u8) !ReadReplic
     }
 }
 
-// pub fn startPhysicalReplication(self: *Connection, slot_name: []const u8, start_lsn: []const u8, timeline: i64) !void {
-// 
-// } 
-
 pub const PluginOption = struct {
     name: []const u8,
     value: ?[]const u8,
@@ -320,6 +317,10 @@ pub fn startLogicalReplication(
                 try sql.appendSlice(self.allocator, " '");
                 try sql.appendSlice(self.allocator, v);
                 try sql.append(self.allocator, '\'');
+                if (std.mem.eql(u8, plugin_option.name, "streaming")
+                    and std.mem.eql(u8, v, "true")) {
+                    self.streaming_enabled = true;
+                }
             }
             if (i < po.items.len-1) {
                 try sql.appendSlice(self.allocator, ", ");
@@ -334,6 +335,12 @@ pub fn startLogicalReplication(
     try self.writer.interface.flush();
 
     var reader = self.reader.interface();
+    const cwd = std.fs.cwd();
+    const file = try cwd.createFile("out.txt", .{});
+    defer file.close();
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&buffer);
+
     while (true) {
         const msg_type = try reader.takeByte();
         std.debug.print("msg_type: {c}\n", .{msg_type});
@@ -359,7 +366,7 @@ pub fn startLogicalReplication(
                         try handleKeepalive(self);
                     },
                     'w' => {
-                        try handleXLogData(self, payload_len-1);
+                        try handleXLogData(self, payload_len-1, &file_writer);
                     },
                     else => {
                         std.debug.print("Unsupported message type {c}\n", .{msg_type});
@@ -382,6 +389,207 @@ pub fn startLogicalReplication(
             },
         }
     }
+    try file_writer.interface.flush();
+}
+
+pub fn parseTupleData(self: *Connection, file_writer: *std.fs.File.Writer) !void {
+    var reader = self.reader.interface();
+    const columns_number = try reader.takeInt(i16, .big);
+    std.debug.print("columns_number: {d}\n", .{columns_number});
+    for (0..@intCast(columns_number)) |i| {
+        try file_writer.interface.print("    Tuple{d}\n", .{i});
+        try file_writer.interface.print("    Data format: {c}\n", .{try reader.takeByte()});
+        const value_len = try reader.takeInt(i32, .big);
+        try file_writer.interface.print("    Value: {any}\n", .{try reader.take(@intCast(value_len))});
+    }
+}
+
+// CAN LEAK MEMORY
+pub fn LsnToString(allocator: std.mem.Allocator, lsn: i64) ![]const u8 {
+    const upper: u32 = @intCast(lsn >> 32);
+    const lower: u32 = @intCast(lsn & 0xffffffff);
+    var string = try std.ArrayList(u8).initCapacity(allocator, 16);
+    try string.print(allocator, "{X}/{X}", .{upper, lower});
+    return string.items;
+}
+
+pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Writer) !void {
+    var reader = self.reader.interface();
+
+    const start = try reader.takeInt(u64, .big);
+    const end = try reader.takeInt(u64, .big);
+    const timestamp = try reader.takeInt(i64, .big);
+    _ = timestamp;
+
+    const payload_size = size - 8 - 8 - 8;
+    const replication_msg_type = try reader.takeByte();
+    std.debug.print("replication_msg_type: {c}\n", .{replication_msg_type});
+
+    switch (replication_msg_type) {
+        'B' => {
+            try file_writer.interface.writeAll("=Begin\n");
+            const transaction_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction LSN: {d}\n", .{transaction_lsn});
+            try file_writer.interface.print("TimestampTz: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction id: {d}\n", .{try self.reader.interface().takeInt(i32, .big)});
+        },
+        'M' => {
+            try file_writer.interface.writeAll("=Message\n");
+            try file_writer.interface.flush();
+        },
+        'C' => {
+            try file_writer.interface.writeAll("=Commit\n");
+            _ = try reader.takeByte();
+            const commit_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Commit LSN: {s}\n", .{commit_lsn});
+            try file_writer.interface.print("TimestampTz: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            const end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("End LSN: {d}\n", .{end_lsn});
+            try file_writer.interface.flush();
+        },
+        'O' => {
+            try file_writer.interface.writeAll("=Origin\n");
+            const commit_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Commit LSN on the origin server: {s}\n", .{commit_lsn});
+            try file_writer.interface.print("Origin name: {s}\n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.flush();
+        },
+        'R' => {
+            try file_writer.interface.writeAll("=Relation\n");
+            try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Namespace: {s}\n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.print("Relation name: {s}\n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.print("Replica identity: {d}\n", .{try reader.takeInt(i8, .big)});
+            const columns_number = try reader.takeInt(i16, .big);
+            for (0..@intCast(columns_number)) |i| {
+                try file_writer.interface.print("Column{d}\n", .{i});
+                try file_writer.interface.print("    Column flags: {d}\n", .{try reader.takeInt(i8, .big)});
+                try file_writer.interface.print("    Column name: {s}\n", .{(try reader.takeDelimiter(0)).?});
+                try file_writer.interface.print("    Column OID: {d}\n", .{try reader.takeInt(i32, .big)});
+                try file_writer.interface.print("    Type modifier: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.flush();
+
+        },
+        'Y' => {
+            try file_writer.interface.writeAll("=Type\n");
+            if (self.streaming_enabled) {
+                try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Namespace: \n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.print("Data type name: \n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.flush();
+
+        },
+        'I' => {
+            try file_writer.interface.writeAll("=Insert\n");
+            if (self.streaming_enabled) {
+                try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            const byte = try reader.takeByte();
+            std.debug.print("byte: {d}\n", .{byte});
+            try parseTupleData(self, file_writer);
+            try file_writer.interface.flush();
+        },
+        'U' => {
+            try file_writer.interface.writeAll("Update\n");
+            try file_writer.interface.flush();
+
+        },
+        'D' => {
+            try file_writer.interface.writeAll("Delete\n");
+            try file_writer.interface.flush();
+
+        },
+        'T' => {
+            try file_writer.interface.writeAll("Truncate\n");
+            try file_writer.interface.flush();
+
+        },
+        'S' => {
+            try file_writer.interface.writeAll("Stream Start\n");
+            try file_writer.interface.flush();
+
+        },
+        'E' => {
+            try file_writer.interface.writeAll("Stream Stop\n");
+            try file_writer.interface.flush();
+        },
+        'c' => {
+            try file_writer.interface.writeAll("Stream Commit\n");
+            try file_writer.interface.flush();
+
+        },
+        'A' => {
+            try file_writer.interface.writeAll("Stream Abort\n");
+            try file_writer.interface.flush();
+
+        },
+        'b' => {
+            try file_writer.interface.writeAll("Begin Prepare\n");
+            try file_writer.interface.flush();
+
+        },
+        'P' => {
+            try file_writer.interface.writeAll("Prepare\n");
+            try file_writer.interface.flush();
+
+        },
+        'K' => {
+            try file_writer.interface.writeAll("Commit Prepared\n");
+            try file_writer.interface.flush();
+
+        },
+        'r' => {
+            try file_writer.interface.writeAll("Rollback Prepared\n");
+            try file_writer.interface.flush();
+
+        },
+        'p' => {
+            try file_writer.interface.writeAll("Stream Prepare\n");
+            try file_writer.interface.flush();
+        },
+        else => {
+            std.debug.print("Unsupported message type {c}\n", .{replication_msg_type});
+            return error.UnknownMessageType;
+        },
+    }
+
+
+    std.debug.print(
+        "WAL: start={} end={} size={}\n",
+        .{ start, end, payload_size }
+    );
+}
+
+pub fn handleKeepalive(self: *Connection) !void {
+    var reader = self.reader.interface();
+
+    const end = try reader.takeInt(u64, .big);
+    const timestamp = try reader.takeInt(i64, .big);
+    const reply_requested = try reader.takeByte();
+    _ = timestamp;
+
+    std.debug.print( "Keepalive: lsn={} reply={}\n", .{ end, reply_requested });
+
+    if (reply_requested == 1) {
+        try sendStandbyStatus(self, end);
+    }
+}
+
+pub fn sendStandbyStatus(self: *Connection, lsn: u64) !void {
+    try self.writer.interface.writeByte('d');
+    try self.writer.interface.writeInt(i32, 4 + 1 + 8 + 8 + 8 + 8 + 1, .big);
+    try self.writer.interface.writeByte('r');
+    try self.writer.interface.writeInt(u64, lsn, .big);
+    try self.writer.interface.writeInt(u64, lsn, .big);
+    try self.writer.interface.writeInt(u64, lsn, .big);
+    try self.writer.interface.writeInt(i64, 0, .big);
+    try self.writer.interface.writeByte(0);
+    try self.writer.interface.flush();
 }
 
 pub fn dropReplicationSlot(self: *Connection, slot_name: []const u8, wait: bool) !void {
@@ -708,51 +916,3 @@ pub fn baseBackup(self: *Connection, bb: BaseBackup) !void {
         try readBackupResponses(self);
 }
 
-pub fn handleXLogData(self: *Connection, size: i32) !void {
-    var reader = self.reader.interface();
-
-    const start = try reader.takeInt(u64, .big);
-    const end = try reader.takeInt(u64, .big);
-    const timestamp = try reader.takeInt(i64, .big);
-    _ = timestamp;
-
-    const payload_size = size - 8 - 8 - 8;
-    const replication_msg_type = try reader.takeByte();
-    std.debug.print("replication_msg_type: {c}", .{replication_msg_type});
-
-    const buf = reader.take(@intCast(payload_size));
-    std.debug.print("buf: {any}\n", .{buf});
-
-    std.debug.print(
-        "WAL: start={} end={} size={}\n",
-        .{ start, end, payload_size }
-    );
-}
-
-pub fn handleKeepalive(self: *Connection) !void {
-    var reader = self.reader.interface();
-
-    const end = try reader.takeInt(u64, .big);
-    const timestamp = try reader.takeInt(i64, .big);
-    const reply_requested = try reader.takeByte();
-    _ = timestamp;
-
-    std.debug.print( "Keepalive: lsn={} reply={}\n", .{ end, reply_requested });
-
-    if (reply_requested == 1) {
-        try sendStandbyStatus(self, end);
-        std.debug.print("REPLY REQUESTED!\n", .{});
-    }
-}
-
-pub fn sendStandbyStatus(self: *Connection, lsn: u64) !void {
-    try self.writer.interface.writeByte('d');
-    try self.writer.interface.writeInt(i32, 4 + 1 + 8 + 8 + 8 + 8 + 1, .big);
-    try self.writer.interface.writeByte('r');
-    try self.writer.interface.writeInt(u64, lsn, .big);
-    try self.writer.interface.writeInt(u64, lsn, .big);
-    try self.writer.interface.writeInt(u64, lsn, .big);
-    try self.writer.interface.writeInt(i64, 0, .big);
-    try self.writer.interface.writeByte(0);
-    try self.writer.interface.flush();
-}
