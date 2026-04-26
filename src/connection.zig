@@ -37,7 +37,8 @@ pub const Connection = struct {
     secret_key: [256]u8,
     backend_key_data: BackendKeyData,
 
-    streaming_enabled: bool,
+    streaming: bool,
+    parallel: bool,
 
     pub fn connect(
         allocator: std.mem.Allocator,
@@ -66,7 +67,8 @@ pub const Connection = struct {
             .secret_key = undefined,
             .backend_key_data = undefined,
 
-            .streaming_enabled = false,
+            .streaming = false,
+            .parallel = false,
         };
         connection.reader = stream.reader(&connection.rbuf);
         connection.writer = stream.writer(&connection.wbuf);

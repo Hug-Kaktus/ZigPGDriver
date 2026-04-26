@@ -9,85 +9,6 @@ const extended_query = @import("extended_query.zig");
 const ParameterValue = extended_query.ParameterValue;
 const fs = std.fs;
 
-pub const Lsn = struct {
-    value: u64,
-
-    pub fn fromParts(high: u32, low: u32) Lsn {
-        return .{ .value = (@as(u64, high) << 32) | low};
-    }
-};
-
-pub const LogicalStream = struct {
-    conn: *Connection,
-    buffer: []const u8,
-
-    last_lsn: Lsn,
-    ack_lsn: Lsn,
-};
-
-pub const Message = union(enum) {
-    begin: Begin,
-    commit: Commit,
-    relation: Relation,
-    insert: Insert,
-    update: Update,
-    delete: Delete,
-};
-
-pub const Begin = struct {
-    final_lsn: Lsn,
-    commit_time: i64,
-    xid: u32,
-};
-
-pub const Commit = struct {
-    lsn: Lsn,
-    end_lsn: Lsn,
-    commit_time: i64,
-};
-
-pub const Relation = struct {
-    id: u32,
-    namespace: []const u8,
-    name: []const u8,
-    replica_identity: u8,
-
-    columns: []const Column,
-
-    pub const Column = struct {
-        flags: u8,
-        name: []const u8,
-        type_oid: u32,
-        atttypmod: i32,
-    };
-};
-
-pub const Tuple = struct {
-    columns: []const ColumnValue,
-
-    pub const ColumnValue = union(enum) {
-        null,
-        unchanged_toast,
-        text: []const u8,
-    };
-};
-
-pub const Insert = struct {
-    relation_id: u32,
-    tuple: Tuple,
-};
-
-pub const Update = struct {
-    relation_id: u32,
-    old: ?Tuple,
-    new: Tuple,
-};
-
-pub const Delete = struct {
-    relation_id: u32,
-    old: Tuple,
-};
-
 pub const IdentifySystemResponse = struct {
     systemid: []const u8,
     timeline: i64,
@@ -297,6 +218,15 @@ pub fn createPublication(self: *Connection, name: []const u8) !void {
     _ = try queryWithFields(self, sql.items);
 }
 
+pub fn dropPublication(self: *Connection, name: []const u8) !void {
+    var sql = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+    defer sql.deinit(self.allocator);
+    try sql.appendSlice(self.allocator, "DROP PUBLICATION ");
+    try sql.appendSlice(self.allocator, name);
+    _ = try queryWithFields(self, sql.items);
+}
+
+
 pub fn startLogicalReplication(
     self: *Connection,
     slot_name: []const u8,
@@ -319,7 +249,7 @@ pub fn startLogicalReplication(
                 try sql.append(self.allocator, '\'');
                 if (std.mem.eql(u8, plugin_option.name, "streaming")
                     and std.mem.eql(u8, v, "true")) {
-                    self.streaming_enabled = true;
+                    self.streaming = true;
                 }
             }
             if (i < po.items.len-1) {
@@ -429,8 +359,8 @@ pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Wr
         'B' => {
             try file_writer.interface.writeAll("=Begin\n");
             const transaction_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
-            try file_writer.interface.print("Transaction LSN: {d}\n", .{transaction_lsn});
-            try file_writer.interface.print("TimestampTz: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction LSN: {s}\n", .{transaction_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
             try file_writer.interface.print("Transaction id: {d}\n", .{try self.reader.interface().takeInt(i32, .big)});
         },
         'M' => {
@@ -442,9 +372,9 @@ pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Wr
             _ = try reader.takeByte();
             const commit_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
             try file_writer.interface.print("Commit LSN: {s}\n", .{commit_lsn});
-            try file_writer.interface.print("TimestampTz: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
             const end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
-            try file_writer.interface.print("End LSN: {d}\n", .{end_lsn});
+            try file_writer.interface.print("End LSN: {s}\n", .{end_lsn});
             try file_writer.interface.flush();
         },
         'O' => {
@@ -470,22 +400,20 @@ pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Wr
                 try file_writer.interface.print("    Type modifier: {d}\n", .{try reader.takeInt(i32, .big)});
             }
             try file_writer.interface.flush();
-
         },
         'Y' => {
             try file_writer.interface.writeAll("=Type\n");
-            if (self.streaming_enabled) {
+            if (self.streaming) {
                 try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
             }
             try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
-            try file_writer.interface.print("Namespace: \n", .{(try reader.takeDelimiter(0)).?});
-            try file_writer.interface.print("Data type name: \n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.print("Namespace: {s}\n", .{(try reader.takeDelimiter(0)).?});
+            try file_writer.interface.print("Data type name: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
-
         },
         'I' => {
             try file_writer.interface.writeAll("=Insert\n");
-            if (self.streaming_enabled) {
+            if (self.streaming) {
                 try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
             }
             try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
@@ -495,61 +423,147 @@ pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Wr
             try file_writer.interface.flush();
         },
         'U' => {
-            try file_writer.interface.writeAll("Update\n");
+            try file_writer.interface.writeAll("=Update\n");
+            if (self.streaming) {
+                try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            const submsg_type = try reader.peekByte();
+            switch (submsg_type) {
+                'K' => {
+                    try parseTupleData(self, file_writer);
+                },
+                'O' => {
+                    try parseTupleData(self, file_writer);
+                },
+                else => {},
+            }
+            reader.toss(1);
+            _ = try reader.takeByte();
+            try parseTupleData(self, file_writer);
             try file_writer.interface.flush();
-
         },
         'D' => {
-            try file_writer.interface.writeAll("Delete\n");
+            try file_writer.interface.writeAll("=Delete\n");
+            if (self.streaming) {
+                try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            const submsg_type = try reader.takeByte();
+            switch (submsg_type) {
+                'K' => {
+                    try parseTupleData(self, file_writer);
+                },
+                'O' => {
+                    try parseTupleData(self, file_writer);
+                },
+                else => return error.UnexpectedByte,
+            }
             try file_writer.interface.flush();
-
         },
         'T' => {
-            try file_writer.interface.writeAll("Truncate\n");
-            try file_writer.interface.flush();
+            try file_writer.interface.writeAll("=Truncate\n");
+            if (self.streaming) {
+                try file_writer.interface.print("Transaction id: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            const relations_number = try reader.takeInt(i32, .big);
+            try file_writer.interface.print("Option bits: {d}\n", .{try reader.takeInt(i32, .big)});
 
+            for (0..@intCast(relations_number)) |_| {
+                try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            }
+            try file_writer.interface.print("Relation OID: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.flush();
         },
         'S' => {
-            try file_writer.interface.writeAll("Stream Start\n");
+            try file_writer.interface.writeAll("=Stream Start\n");
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Is first stream segment: {d}\n", .{try reader.takeInt(i8, .big)});
             try file_writer.interface.flush();
-
         },
         'E' => {
-            try file_writer.interface.writeAll("Stream Stop\n");
+            try file_writer.interface.writeAll("=Stream Stop\n");
             try file_writer.interface.flush();
         },
         'c' => {
-            try file_writer.interface.writeAll("Stream Commit\n");
+            try file_writer.interface.writeAll("=Stream Commit\n");
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            _ = try reader.takeByte();
+            const commit_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Commit LSN: {s}\n", .{commit_lsn});
+            const transaction_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction end LSN: {s}\n", .{transaction_end_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
             try file_writer.interface.flush();
-
         },
         'A' => {
-            try file_writer.interface.writeAll("Stream Abort\n");
+            try file_writer.interface.writeAll("=Stream Abort\n");
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Subtransaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            if (self.parallel) {
+                const operation_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+                try file_writer.interface.print("Operation LSN: {s}\n", .{operation_lsn});
+            }
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
             try file_writer.interface.flush();
-
         },
         'b' => {
-            try file_writer.interface.writeAll("Begin Prepare\n");
+            try file_writer.interface.writeAll("=Begin Prepare\n");
+            const prepare_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Prepare LSN: {s}\n", .{prepare_lsn});
+            const transaction_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction end LSN: {s}\n", .{transaction_end_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Prepared transaction GID: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
-
         },
         'P' => {
-            try file_writer.interface.writeAll("Prepare\n");
+            try file_writer.interface.writeAll("=Prepare\n");
+            _ = try reader.takeByte();
+            const prepare_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Prepare LSN: {s}\n", .{prepare_lsn});
+            const transaction_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction end LSN: {s}\n", .{transaction_end_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Prepared transaction GID: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
-
         },
         'K' => {
-            try file_writer.interface.writeAll("Commit Prepared\n");
+            try file_writer.interface.writeAll("=Commit Prepared\n");
+            _ = try reader.takeByte();
+            const commit_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction commit LSN: {s}\n", .{commit_lsn});
+            const commit_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction commit end LSN: {s}\n", .{commit_end_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Prepared transaction GID: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
-
         },
         'r' => {
-            try file_writer.interface.writeAll("Rollback Prepared\n");
+            try file_writer.interface.writeAll("=Rollback Prepared\n");
+            const transaction_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Transaction commit end LSN: {s}\n", .{transaction_end_lsn});
+            const rollback_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Rollback end LSN: {s}\n", .{rollback_end_lsn});
+            try file_writer.interface.print("Prepare timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Rollback timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Prepared transaction GID: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
-
         },
         'p' => {
-            try file_writer.interface.writeAll("Stream Prepare\n");
+            try file_writer.interface.writeAll("=Stream Prepare\n");
+            _ = try reader.takeByte();
+            const prepare_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Prepare LSN: {s}\n", .{prepare_lsn});
+            const transaction_end_lsn = try LsnToString(self.allocator, try self.reader.interface().takeInt(i64, .big));
+            try file_writer.interface.print("Prepared transaction end LSN: {s}\n", .{transaction_end_lsn});
+            try file_writer.interface.print("Timestamp: {d}\n", .{try self.reader.interface().takeInt(i64, .big)});
+            try file_writer.interface.print("Transaction xid: {d}\n", .{try reader.takeInt(i32, .big)});
+            try file_writer.interface.print("Prepared transaction GID: {s}\n", .{(try reader.takeDelimiter(0)).?});
             try file_writer.interface.flush();
         },
         else => {

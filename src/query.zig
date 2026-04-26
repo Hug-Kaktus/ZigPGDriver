@@ -215,7 +215,6 @@ pub fn queryTyped(
     comptime T: type,
     sql: []const u8,
 ) !std.ArrayList(T) {
-    std.debug.print("sql:\n{s}\n", .{sql});
     var result = try queryWithFields(self, sql);
     defer result.deinit();
 

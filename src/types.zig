@@ -112,7 +112,7 @@ pub const QueryResult = struct {
     }
 };
 
-const PreparedStatement = struct {
+pub const PreparedStatement = struct {
     name: []const u8,
     fields: std.ArrayList(FieldData),
     parameter_count: i32,
@@ -132,7 +132,7 @@ const PreparedStatement = struct {
     }
 };
 
-const BindedPreparedStatement = struct {
+pub const BindedPreparedStatement = struct {
     prepared_statement: *const PreparedStatement,
     portal_name: []const u8,
 
