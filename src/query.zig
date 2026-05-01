@@ -16,19 +16,18 @@ const FieldData = types.FieldData;
 const Row = types.Row;
 const QueryResult = types.QueryResult;
 
-
 fn decodeValueText(allocator: std.mem.Allocator, T: PgType, bytes: ?[]const u8) !Value {
     if (bytes == null) return Value.Null;
     const b = bytes.?;
 
     return switch (T) {
-        .Int4 => Value{ .Int4 = try std.fmt.parseInt(i32, b, 10)},
-        .Int8 => Value{ .Int8 = try std.fmt.parseInt(i64, b, 10)},
-        .Float4 => Value{ .Float4 = try std.fmt.parseFloat(f32, b)},
-        .Float8 => Value{ .Float8 = try std.fmt.parseFloat(f64, b)},
-        .Bool => Value{ .Bool = (b.len > 0 and b[0] == 't')},
+        .Int4 => Value{ .Int4 = try std.fmt.parseInt(i32, b, 10) },
+        .Int8 => Value{ .Int8 = try std.fmt.parseInt(i64, b, 10) },
+        .Float4 => Value{ .Float4 = try std.fmt.parseFloat(f32, b) },
+        .Float8 => Value{ .Float8 = try std.fmt.parseFloat(f64, b) },
+        .Bool => Value{ .Bool = (b.len > 0 and b[0] == 't') },
         .Text => Value{ .Text = b },
-        .Unknown => Value{ .Text = try allocator.dupe(u8, b)},
+        .Unknown => Value{ .Text = try allocator.dupe(u8, b) },
     };
 }
 
@@ -146,7 +145,7 @@ pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
     return Row{ .values = values };
 }
 
-pub fn queryWithFields(self: *Connection, sql: []const u8) !QueryResult {
+pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
     std.debug.print("sql:\n{s}\n", .{sql});
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     const a = arena.allocator();
@@ -215,7 +214,7 @@ pub fn queryTyped(
     comptime T: type,
     sql: []const u8,
 ) !std.ArrayList(T) {
-    var result = try queryWithFields(self, sql);
+    var result = try queryUntyped(self, sql);
     defer result.deinit();
 
     var out = try std.ArrayList(T).initCapacity(self.allocator, 128);

@@ -23,11 +23,14 @@ const readReplicationSlot = replication.readReplicationSlot;
 const startLogicalReplication = replication.startLogicalReplication;
 const PluginOption = replication.PluginOption;
 const createPublication = replication.createPublication;
+const copy = @import("copy.zig");
+const copyToWriter = copy.copyToWriter;
+const copyFromReader = copy.copyFromReader;
 
 const Data = @import("types.zig").Data;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
 
     var conn = try Connection.connect(
@@ -52,8 +55,14 @@ pub fn main() !void {
         "database",
     );
     defer replication_conn.close();
-    var options = try std.ArrayList(PluginOption).initCapacity(allocator, 8);
-    try options.append(allocator, .{.name = "proto_version", .value = "4"});
-    try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
-    try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
+    // var options = try std.ArrayList(PluginOption).initCapacity(allocator, 8);
+    // try options.append(allocator, .{.name = "proto_version", .value = "4"});
+    // try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
+    // try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
+    var file = try std.fs.cwd().openFile("data.csv", .{});
+    defer file.close();
+    var buf: [4096]u8 = undefined;
+
+    var reader = file.reader(&buf);
+    try copyFromReader(&conn, "employee", &reader);
 }

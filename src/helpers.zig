@@ -30,7 +30,7 @@ pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.A
             else => {
                 _ = try reader.takeDelimiter(0);
                 continue;
-            }
+            },
         }
         try message.appendSlice(allocator, (try reader.takeDelimiter(0)).?);
         try message.appendSlice(allocator, "\n");
@@ -88,6 +88,6 @@ pub fn parseKeyValuePayload(self: *Connection) !void {
         },
         else => {
             std.debug.print("Unknown backend key parameter \"{s}\" is ignored.", .{value});
-        }
+        },
     }
 }

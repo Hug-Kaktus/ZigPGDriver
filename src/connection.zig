@@ -4,6 +4,7 @@ const buildMessage = helpers.buildMessage;
 const startup = @import("startup.zig").startup;
 const types = @import("types.zig");
 const PendingQuery = types.PendingQuery;
+const ScramState = types.ScramState;
 
 const BackendKeyData = struct {
     in_hot_standby: []const u8,
@@ -24,13 +25,17 @@ const BackendKeyData = struct {
 };
 
 pub const Connection = struct {
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     allocator: std.mem.Allocator,
     rbuf: [4096]u8,
     wbuf: [4096]u8,
-    reader: std.net.Stream.Reader,
-    writer: std.net.Stream.Writer,
+    reader: std.Io.net.Stream.Reader,
+    writer: std.Io.net.Stream.Writer,
     pending: std.ArrayList(PendingQuery),
+
+    user: []const u8,
+    scram_state: ?ScramState,
+    oauth_token: ?[]const u8,
 
     process_id: i32,
     secret_key_len: i32,
@@ -49,8 +54,8 @@ pub const Connection = struct {
         database: []const u8,
         replication: []const u8,
     ) !Connection {
-        const address = try std.net.Address.parseIp(host, port);
-        var stream = try std.net.tcpConnectToAddress(address);
+        const address = try std.Io.net.Ip4Address.parse(host, port);
+        var stream = try std.Io.net.IpAddress.connect(address);
         errdefer stream.close();
 
         var connection = Connection{
@@ -61,6 +66,10 @@ pub const Connection = struct {
             .reader = undefined,
             .writer = undefined,
             .pending = try std.ArrayList(PendingQuery).initCapacity(allocator, 8),
+
+            .user = user,
+            .scram_state = null,
+            .oauth_token = null,
 
             .process_id = undefined,
             .secret_key_len = undefined,

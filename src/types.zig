@@ -1,5 +1,12 @@
 const std = @import("std");
 
+pub const ScramState = struct {
+    client_nonce: []const u8,
+    server_nonce: []const u8,
+    salt: []const u8,
+    iterations: u32,
+};
+
 pub const FieldData = struct {
     table_object_id: i32,
     data_type_object_id: i32,
@@ -127,7 +134,7 @@ pub const PreparedStatement = struct {
         std.debug.print("Parameter count: {d}\n", .{self.parameter_count});
         std.debug.print("Parameters:\n", .{});
         for (self.parameters.items, 1..) |parameter, i| {
-            std.debug.print("{d}. {s}\n", .{i, @tagName(oidToType(parameter))});
+            std.debug.print("{d}. {s}\n", .{ i, @tagName(oidToType(parameter)) });
         }
     }
 };

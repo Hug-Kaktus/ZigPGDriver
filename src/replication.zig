@@ -16,8 +16,7 @@ pub const IdentifySystemResponse = struct {
     dbname: []const u8,
 
     pub fn show(self: *const IdentifySystemResponse) void {
-        std.debug.print("systemid: {s}, timeline: {d}, xlogpos: {s}, dbname: {s}\n", .{self.systemid,
-            self.timeline, self.xlogpos, self.dbname});
+        std.debug.print("systemid: {s}, timeline: {d}, xlogpos: {s}, dbname: {s}\n", .{ self.systemid, self.timeline, self.xlogpos, self.dbname });
     }
 };
 
@@ -26,7 +25,7 @@ pub const TimelineHistoryResponse = struct {
     content: []const u8,
 
     pub fn show(self: *const TimelineHistoryResponse) void {
-        std.debug.print("filename: {s}, content: {s}\n", .{self.filename, self.content});
+        std.debug.print("filename: {s}, content: {s}\n", .{ self.filename, self.content });
     }
 };
 
@@ -34,16 +33,22 @@ pub fn identifySystem(self: *Connection) !IdentifySystemResponse {
     return (try queryTyped(self, IdentifySystemResponse, "IDENTIFY_SYSTEM")).items[0];
 }
 
-pub fn showParam(self: *Connection, name: []const u8) ![]const u8 {
-    var sql = try std.ArrayList(u8).initCapacity(self.allocator, 5+name.len);
+pub fn showParam(
+    self: *Connection,
+    name: []const u8,
+) ![]const u8 {
+    var sql = try std.ArrayList(u8).initCapacity(self.allocator, 5 + name.len);
     defer sql.deinit(self.allocator);
     try sql.appendSlice(self.allocator, "SHOW ");
     try sql.appendSlice(self.allocator, name);
     return (try queryWithFields(self, sql.items)).rows.items[0].values[0].Text;
 }
 
-pub fn timelineHistory(self: *Connection, tli: []const u8) !TimelineHistoryResponse {
-    var sql = try std.ArrayList(u8).initCapacity(self.allocator, 17+tli.len);
+pub fn timelineHistory(
+    self: *Connection,
+    tli: []const u8,
+) !TimelineHistoryResponse {
+    var sql = try std.ArrayList(u8).initCapacity(self.allocator, 17 + tli.len);
     defer sql.deinit(self.allocator);
     try sql.appendSlice(self.allocator, "TIMELINE_HISTORY ");
     try sql.appendSlice(self.allocator, tli);
@@ -132,10 +137,7 @@ pub fn createReplicationSlotAdvanced(
     return (try queryTyped(self, CreateReplicationSlotResponse, sql.items)).items[0];
 }
 
-pub fn createPhysicalReplicationSlot(
-    self: *Connection,
-    slot_name: []const u8
-    ) !CreateReplicationSlotResponse {
+pub fn createPhysicalReplicationSlot(self: *Connection, slot_name: []const u8) !CreateReplicationSlotResponse {
     return try createReplicationSlotAdvanced(self, slot_name, false, .physical, null, false, false, .nothing, false);
 }
 
@@ -143,7 +145,7 @@ pub fn createLogicalReplicationSlot(
     self: *Connection,
     slot_name: []const u8,
     output_plugin: []const u8,
-    ) !CreateReplicationSlotResponse {
+) !CreateReplicationSlotResponse {
     return try createReplicationSlotAdvanced(self, slot_name, false, .logical, output_plugin, false, false, .exp, false);
 }
 
@@ -226,13 +228,12 @@ pub fn dropPublication(self: *Connection, name: []const u8) !void {
     _ = try queryWithFields(self, sql.items);
 }
 
-
 pub fn startLogicalReplication(
     self: *Connection,
     slot_name: []const u8,
     start_lsn: []const u8,
-    plugin_options: ?std.ArrayList(PluginOption)
-    ) !void {
+    plugin_options: ?std.ArrayList(PluginOption),
+) !void {
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 128);
     defer sql.deinit(self.allocator);
     try sql.appendSlice(self.allocator, "START_REPLICATION SLOT ");
@@ -247,12 +248,11 @@ pub fn startLogicalReplication(
                 try sql.appendSlice(self.allocator, " '");
                 try sql.appendSlice(self.allocator, v);
                 try sql.append(self.allocator, '\'');
-                if (std.mem.eql(u8, plugin_option.name, "streaming")
-                    and std.mem.eql(u8, v, "true")) {
+                if (std.mem.eql(u8, plugin_option.name, "streaming") and std.mem.eql(u8, v, "true")) {
                     self.streaming = true;
                 }
             }
-            if (i < po.items.len-1) {
+            if (i < po.items.len - 1) {
                 try sql.appendSlice(self.allocator, ", ");
             }
         }
@@ -296,7 +296,7 @@ pub fn startLogicalReplication(
                         try handleKeepalive(self);
                     },
                     'w' => {
-                        try handleXLogData(self, payload_len-1, &file_writer);
+                        try handleXLogData(self, payload_len - 1, &file_writer);
                     },
                     else => {
                         std.debug.print("Unsupported message type {c}\n", .{msg_type});
@@ -322,7 +322,10 @@ pub fn startLogicalReplication(
     try file_writer.interface.flush();
 }
 
-pub fn parseTupleData(self: *Connection, file_writer: *std.fs.File.Writer) !void {
+pub fn parseTupleData(
+    self: *Connection,
+    file_writer: *std.fs.File.Writer,
+) !void {
     var reader = self.reader.interface();
     const columns_number = try reader.takeInt(i16, .big);
     std.debug.print("columns_number: {d}\n", .{columns_number});
@@ -339,7 +342,7 @@ pub fn LsnToString(allocator: std.mem.Allocator, lsn: i64) ![]const u8 {
     const upper: u32 = @intCast(lsn >> 32);
     const lower: u32 = @intCast(lsn & 0xffffffff);
     var string = try std.ArrayList(u8).initCapacity(allocator, 16);
-    try string.print(allocator, "{X}/{X}", .{upper, lower});
+    try string.print(allocator, "{X}/{X}", .{ upper, lower });
     return string.items;
 }
 
@@ -572,11 +575,7 @@ pub fn handleXLogData(self: *Connection, size: i32, file_writer: *std.fs.File.Wr
         },
     }
 
-
-    std.debug.print(
-        "WAL: start={} end={} size={}\n",
-        .{ start, end, payload_size }
-    );
+    std.debug.print("WAL: start={} end={} size={}\n", .{ start, end, payload_size });
 }
 
 pub fn handleKeepalive(self: *Connection) !void {
@@ -587,7 +586,7 @@ pub fn handleKeepalive(self: *Connection) !void {
     const reply_requested = try reader.takeByte();
     _ = timestamp;
 
-    std.debug.print( "Keepalive: lsn={} reply={}\n", .{ end, reply_requested });
+    std.debug.print("Keepalive: lsn={} reply={}\n", .{ end, reply_requested });
 
     if (reply_requested == 1) {
         try sendStandbyStatus(self, end);
@@ -606,7 +605,11 @@ pub fn sendStandbyStatus(self: *Connection, lsn: u64) !void {
     try self.writer.interface.flush();
 }
 
-pub fn dropReplicationSlot(self: *Connection, slot_name: []const u8, wait: bool) !void {
+pub fn dropReplicationSlot(
+    self: *Connection,
+    slot_name: []const u8,
+    wait: bool,
+) !void {
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 64);
     defer sql.deinit(self.allocator);
     try sql.appendSlice(self.allocator, "DROP_REPLICATION_SLOT ");
@@ -687,7 +690,7 @@ pub const BaseBackup = struct {
     verify_checksums: ?bool,
     manifest: ?ManifestOption,
     manifest_checksums: ?ManifestChecksumAlgorithm,
-    incremental: ?bool
+    incremental: ?bool,
 };
 
 pub const BackupFirstResponse = struct {
@@ -711,11 +714,11 @@ pub fn intToString(allocator: std.mem.Allocator, comptime T: type, x: T) !std.Ar
     var dividend_not_zero = true;
     var remainder: u8 = undefined;
     var i: usize = 1;
-    while (dividend_not_zero): (i += 1) {
+    while (dividend_not_zero) : (i += 1) {
         remainder = @intCast(x % std.math.pow(usize, 10, i));
         x -= remainder;
         dividend_not_zero = x != 0;
-        string.append(allocator, remainder / std.fmt.digitToChar(std.math.pow(usize, 10, i-1), .lower));
+        string.append(allocator, remainder / std.fmt.digitToChar(std.math.pow(usize, 10, i - 1), .lower));
     }
     return string;
 }
@@ -748,7 +751,7 @@ pub fn readBackupResponses(self: *Connection) !void {
             'n' => {
                 const archive_name = (try reader.takeDelimiter(0)).?;
                 const directory = (try reader.takeDelimiter(0)).?;
-                std.debug.print("archive_name: {s} directory: {s}\n", .{archive_name, directory});
+                std.debug.print("archive_name: {s} directory: {s}\n", .{ archive_name, directory });
             },
             'm' => {
                 std.debug.print("Backup manifest started\n", .{});
@@ -793,8 +796,8 @@ pub fn baseBackupAdvanced(
     verify_checksums: ?bool,
     manifest: ?ManifestOption,
     manifest_checksums: ?ManifestChecksumAlgorithm,
-    incremental: ?bool
-    ) !void {
+    incremental: ?bool,
+) !void {
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 64);
     defer sql.deinit(self.allocator);
     try sql.appendSlice(self.allocator, "BASE_BACKUP");
@@ -923,10 +926,23 @@ pub fn baseBackupAdvanced(
 }
 
 pub fn baseBackup(self: *Connection, bb: BaseBackup) !void {
-    baseBackupAdvanced(self, bb.label, bb.target, bb.target_detail, bb.progress,
-        bb.checkpoint, bb.wal, bb.wait, bb.compression, bb.compression_detail,
-        bb.max_rate, bb.tablespace_map, bb.verify_checksums, bb.manifest,
-        bb.manifest_checksums, bb.incremental);
-        try readBackupResponses(self);
+    baseBackupAdvanced(
+        self,
+        bb.label,
+        bb.target,
+        bb.target_detail,
+        bb.progress,
+        bb.checkpoint,
+        bb.wal,
+        bb.wait,
+        bb.compression,
+        bb.compression_detail,
+        bb.max_rate,
+        bb.tablespace_map,
+        bb.verify_checksums,
+        bb.manifest,
+        bb.manifest_checksums,
+        bb.incremental,
+    );
+    try readBackupResponses(self);
 }
-

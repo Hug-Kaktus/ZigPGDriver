@@ -19,18 +19,17 @@ const PreparedStatement = types.PreparedStatement;
 const BindedPreparedStatement = types.BindedPreparedStatement;
 const PendingQuery = types.PendingQuery;
 
-
 pub fn parseMsg(
-        self: *Connection,
-        query_name: []const u8,
-        query: []const u8,
-        param_types: *std.ArrayList(i32),
-    ) !void {
+    self: *Connection,
+    query_name: []const u8,
+    query: []const u8,
+    param_types: *std.ArrayList(i32),
+) !void {
     const message_len: usize = 4 +
-                             query_name.len + 1 +
-                             query.len + 1 +
-                             2 +
-                             param_types.items.len*4;
+        query_name.len + 1 +
+        query.len + 1 +
+        2 +
+        param_types.items.len * 4;
     try self.writer.interface.writeByte('P');
     try self.writer.interface.writeInt(i32, @intCast(message_len), .big);
     try self.writer.interface.writeAll(query_name);
@@ -65,22 +64,22 @@ pub fn bindMsg(
 ) !void {
     try self.writer.interface.writeByte('B');
     const len = 4 +
-    destination_portal.len + 1 +
-    source_prepared_statement.name.len + 1 +
-    2 + parameter_format_codes.items.len * 2 +
-    2 +
-    blk: {
-        var sum: usize = 0;
-        for (parameter_values.items) |v| {
-            if (v.length == -1) {
-                sum += 4;
-            } else {
-                sum += 4 + @as(usize, @intCast(v.length));
+        destination_portal.len + 1 +
+        source_prepared_statement.name.len + 1 +
+        2 + parameter_format_codes.items.len * 2 +
+        2 +
+        blk: {
+            var sum: usize = 0;
+            for (parameter_values.items) |v| {
+                if (v.length == -1) {
+                    sum += 4;
+                } else {
+                    sum += 4 + @as(usize, @intCast(v.length));
+                }
             }
-        }
-        break :blk sum;
-    } +
-    2 + result_column_format_codes.items.len * 2;
+            break :blk sum;
+        } +
+        2 + result_column_format_codes.items.len * 2;
 
     try self.writer.interface.writeInt(i32, @intCast(len), .big);
     try self.writer.interface.writeAll(destination_portal);
@@ -110,16 +109,8 @@ pub fn bindPreparedStatement(
     parameter_format_codes: std.ArrayList(i16),
     parameter_values: std.ArrayList(ParameterValue),
     result_column_format_codes: std.ArrayList(i16),
-)
-!BindedPreparedStatement {
-    try bindMsg(
-        self,
-        destination_portal,
-        source_prepared_statement,
-        parameter_format_codes,
-        parameter_values,
-        result_column_format_codes
-    );
+) !BindedPreparedStatement {
+    try bindMsg(self, destination_portal, source_prepared_statement, parameter_format_codes, parameter_values, result_column_format_codes);
     try flush(self);
     var reader = self.reader.interface();
     while (true) {
@@ -164,7 +155,11 @@ pub fn flush(self: *Connection) !void {
     try self.writer.interface.flush();
 }
 
-pub fn close(self: *Connection, object_type: u8, name: []const u8,) !void {
+pub fn close(
+    self: *Connection,
+    object_type: u8,
+    name: []const u8,
+) !void {
     try self.writer.interface.writeByte('C');
     try self.writer.interface.writeInt(i32, 4 + 1 + name.len + 1, .big);
     try self.writer.interface.writeByte(object_type);
@@ -261,7 +256,7 @@ pub fn executeQuery(
     self: *Connection,
     binded_prepared_statement: *const BindedPreparedStatement,
     max_rows_number: i32,
-    ) !QueryResult {
+) !QueryResult {
     try executeMsg(self, binded_prepared_statement.portal_name, max_rows_number);
     try sync(self);
     var reader = self.reader.interface();
@@ -318,7 +313,7 @@ pub fn executeQueryTyped(
     comptime T: type,
     binded_prepared_statement: *const BindedPreparedStatement,
     max_rows_number: i32,
-    ) !std.ArrayList(T) {
+) !std.ArrayList(T) {
     var result = try executeQuery(self, binded_prepared_statement, max_rows_number);
     defer result.deinit();
     var out = try std.ArrayList(T).initCapacity(self.allocator, 8);
@@ -330,14 +325,7 @@ pub fn executeQueryTyped(
 }
 
 pub fn sendStatement(self: *Connection, prepared_statement: PreparedStatement, params: std.ArrayList(ParameterValue)) !void {
-    try bindMsg(
-        self,
-        "",
-        prepared_statement.name,
-        std.ArrayList(i32).initCapacity(self.allocator, 0),
-        params,
-        std.ArrayList(i16).initCapacity(self.allocator, 0)
-    );
+    try bindMsg(self, "", prepared_statement.name, std.ArrayList(i32).initCapacity(self.allocator, 0), params, std.ArrayList(i16).initCapacity(self.allocator, 0));
     try executeMsg(self, "", 0);
 }
 
@@ -363,15 +351,15 @@ pub fn readPipeline(self: *Connection) !void {
                 }
                 break;
             } else {
-                try reader.take(msg_len-4);
+                try reader.take(msg_len - 4);
                 continue;
             }
         }
 
         var current = &self.pending.items[current_query_index];
         switch (msg_type) {
-            '1' => try reader.take(msg_len-4),
-            '2' => try reader.take(msg_len-4),
+            '1' => try reader.take(msg_len - 4),
+            '2' => try reader.take(msg_len - 4),
             'D' => {
                 if (current.prepared_statement.fields) |f| {
                     const row = try parseRowData(self, f.items);
@@ -381,7 +369,7 @@ pub fn readPipeline(self: *Connection) !void {
                 }
             },
             'C' => {
-                try reader.take(msg_len-4);
+                try reader.take(msg_len - 4);
                 current.state = .done;
             },
             'Z' => {
@@ -418,7 +406,9 @@ pub fn cancel(self: *Connection, process_id: i32, secret_key: []const u8) !void 
     try self.writer.interface.flush();
 }
 
-pub fn terminate(self: *Connection,) !void {
+pub fn terminate(
+    self: *Connection,
+) !void {
     try self.writer.interface.writeByte('X');
     try self.writer.interface.writeInt(i32, 4, .big);
     try self.writer.interface.flush();
