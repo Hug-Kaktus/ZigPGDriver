@@ -25,6 +25,7 @@ const BackendKeyData = struct {
 };
 
 pub const Connection = struct {
+    io: std.Io,
     stream: std.Io.net.Stream,
     allocator: std.mem.Allocator,
     rbuf: [4096]u8,
@@ -47,18 +48,21 @@ pub const Connection = struct {
 
     pub fn connect(
         allocator: std.mem.Allocator,
+        io: std.Io,
         host: []const u8,
         port: u16,
         user: []const u8,
         password: []const u8,
         database: []const u8,
         replication: []const u8,
-    ) !Connection {
-        const address = try std.Io.net.Ip4Address.parse(host, port);
-        var stream = try std.Io.net.IpAddress.connect(address);
-        errdefer stream.close();
+    ) !*Connection {
+        const ip4 = try std.Io.net.Ip4Address.parse(host, port);
+        var addr = std.Io.net.IpAddress{ .ip4 = ip4 };
+        var stream = try std.Io.net.IpAddress.connect(&addr, io, .{ .mode = .stream });
 
-        var connection = Connection{
+        var connection = try allocator.create(Connection);
+        connection.* = Connection{
+            .io = io,
             .stream = stream,
             .allocator = allocator,
             .rbuf = undefined,
@@ -79,14 +83,20 @@ pub const Connection = struct {
             .streaming = false,
             .parallel = false,
         };
-        connection.reader = stream.reader(&connection.rbuf);
-        connection.writer = stream.writer(&connection.wbuf);
+        connection.reader = stream.reader(io, &connection.rbuf);
+        connection.writer = stream.writer(io, &connection.wbuf);
+        std.debug.print("rbuf addr (inside): {*}\n", .{&connection.rbuf});
+        errdefer connection.close();
 
         try startup(&connection, user, password, database, replication);
         return connection;
     }
 
     pub fn close(self: *Connection) void {
-        self.stream.close();
+        self.pending.deinit(self.allocator);
+        self.stream.close(self.io);
+        if (self.scram_state) |*value| {
+            value.*.deinit(self.allocator);
+        }
     }
 };

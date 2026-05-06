@@ -29,12 +29,13 @@ const copyFromReader = copy.copyFromReader;
 
 const Data = @import("types.zig").Data;
 
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const gpa = init.gpa;
 
     var conn = try Connection.connect(
-        allocator,
+        gpa,
+        io,
         "127.0.0.1",
         5432,
         "postgres",
@@ -42,27 +43,20 @@ pub fn main() !void {
         "test",
         "false",
     );
-    defer conn.close();
-
-    // ===== Replication protocol test =====
-    var replication_conn = try Connection.connect(
-        allocator,
-        "127.0.0.1",
-        5432,
-        "postgres",
-        "1",
-        "test",
-        "database",
-    );
-    defer replication_conn.close();
+    defer {
+        conn.close();
+        gpa.destroy(conn);
+    }
+    std.debug.print("rbuf addr (outside): {*}\n", .{&conn.rbuf});
     // var options = try std.ArrayList(PluginOption).initCapacity(allocator, 8);
     // try options.append(allocator, .{.name = "proto_version", .value = "4"});
     // try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
     // try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
-    var file = try std.fs.cwd().openFile("data.csv", .{});
-    defer file.close();
-    var buf: [4096]u8 = undefined;
+    var file = try std.Io.Dir.cwd().openFile(io, "data.csv", .{});
+    defer file.close(io);
+    const buf: []u8 = try conn.allocator.alloc(u8, 4096);
+    defer conn.allocator.free(buf);
 
-    var reader = file.reader(&buf);
-    try copyFromReader(&conn, "employee", &reader);
+    var reader = file.reader(io, buf);
+    try copyFromReader(conn, "employee", &reader);
 }

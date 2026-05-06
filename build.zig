@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    exe.linkLibrary(lib);
+    exe.root_module.addImport("ZigPGDriver", lib.root_module);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

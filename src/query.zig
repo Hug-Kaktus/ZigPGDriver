@@ -84,7 +84,7 @@ pub fn decodeRowToStruct(
 }
 
 pub fn parseFieldData(self: *Connection) !std.ArrayList(FieldData) {
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     const field_number = try reader.takeInt(i16, .big);
     var array = try std.ArrayList(FieldData).initCapacity(self.allocator, @intCast(field_number));
     var k: u16 = 0;
@@ -111,7 +111,7 @@ pub fn parseFieldData(self: *Connection) !std.ArrayList(FieldData) {
 }
 
 pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     const values_number = try reader.takeInt(i16, .big);
     var values = try self.allocator.alloc(Value, @intCast(values_number));
 
@@ -158,8 +158,8 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
     var fields: ?std.ArrayList(FieldData) = null;
     var rows = try std.ArrayList(Row).initCapacity(a, 16);
     while (true) {
-        const msg_type = try self.reader.interface().takeByte();
-        _ = try self.reader.interface().takeInt(i32, .big);
+        const msg_type = try self.reader.interface.takeByte();
+        _ = try self.reader.interface.takeInt(i32, .big);
         switch (msg_type) {
             'T' => {
                 fields = try parseFieldData(self);
@@ -169,7 +169,7 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
                 try rows.append(a, row);
             },
             'C' => {
-                const command_tag: []const u8 = (try self.reader.interface().takeDelimiter(0)).?;
+                const command_tag: []const u8 = (try self.reader.interface.takeDelimiter(0)).?;
                 std.debug.print("{s}\n", .{command_tag});
                 return QueryResult{
                     .arena = arena,
@@ -185,7 +185,7 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
                 };
             },
             'Z' => {
-                _ = try self.reader.interface().takeByte();
+                _ = try self.reader.interface.takeByte();
                 return QueryResult{
                     .arena = arena,
                     .fields = if (fields) |f| f else try std.ArrayList(FieldData).initCapacity(a, 0),
@@ -193,12 +193,14 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
                 };
             },
             'E' => {
-                const error_message = try buildMessage(a, self.reader.interface());
+                var error_message = try buildMessage(a, self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(a, self.reader.interface());
+                var notice_message = try buildMessage(a, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {

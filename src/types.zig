@@ -5,6 +5,29 @@ pub const ScramState = struct {
     server_nonce: []const u8,
     salt: []const u8,
     iterations: u32,
+    client_first_bare: []const u8,
+
+    auth_message: []u8,
+    salted_password: [32]u8,
+
+    pub fn show(self: *const ScramState) void {
+        std.debug.print("===== ScramState =====\n", .{});
+        std.debug.print("client_nonce: {s}\n", .{self.client_nonce});
+        std.debug.print("server_nonce: {s}\n", .{self.server_nonce});
+        std.debug.print("salt: {x}\n", .{self.salt});
+        std.debug.print("iterations: {d}\n", .{self.iterations});
+        std.debug.print("client_first_bare: {s}\n", .{self.client_first_bare});
+        std.debug.print("auth_message: {s}\n", .{self.auth_message});
+        std.debug.print("salted_password: {s}\n", .{self.salted_password});
+    }
+
+    pub fn deinit(self: *ScramState, allocator: std.mem.Allocator) void {
+        // allocator.free(self.client_nonce);
+        allocator.free(self.server_nonce);
+        allocator.free(self.salt);
+        allocator.free(self.client_first_bare);
+        allocator.free(self.auth_message);
+    }
 };
 
 pub const FieldData = struct {

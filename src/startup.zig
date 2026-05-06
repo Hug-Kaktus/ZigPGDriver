@@ -32,33 +32,35 @@ pub fn startup(
     try self.writer.interface.flush();
 
     while (true) {
-        const msg_type = try self.reader.interface().takeByte();
-        const payload_len: usize = @intCast(try self.reader.interface().takeInt(i32, .big) - 4);
+        const msg_type = try self.reader.interface.takeByte();
+        const payload_len: usize = @intCast(try self.reader.interface.takeInt(i32, .big) - 4);
 
         switch (msg_type) {
             'K' => {
-                self.process_id = try self.reader.interface().takeInt(i32, .big);
+                self.process_id = try self.reader.interface.takeInt(i32, .big);
                 self.secret_key_len = @as(i32, @intCast(payload_len)) - 4;
-                _ = try self.reader.interface().readSliceShort(self.secret_key[0 .. payload_len - 4]);
+                _ = try self.reader.interface.readSliceShort(self.secret_key[0 .. payload_len - 4]);
             },
             'R' => {
                 try authenticate(self, @intCast(payload_len), password);
             },
             'Z' => {
                 // transaction_status
-                _ = try self.reader.interface().takeByte();
+                _ = try self.reader.interface.takeByte();
                 return;
             },
             'S' => {
                 try parseKeyValuePayload(self);
             },
             'E' => {
-                const error_message = try buildMessage(self.allocator, self.reader.interface());
+                var error_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => std.debug.print("Unknown msg: {c}\n", .{msg_type}),

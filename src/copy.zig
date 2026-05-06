@@ -16,9 +16,10 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
 
-    var r = self.reader.interface();
+    var r = self.reader.interface;
 
     while (true) {
+        std.debug.print("hello\n", .{});
         const msg_type = try r.takeByte();
         _ = try r.takeInt(i32, .big);
 
@@ -34,12 +35,14 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
             },
             'S' => try parseKeyValuePayload(self),
             'E' => {
-                const error_message = try buildMessage(self.allocator, self.reader.interface());
+                var error_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -69,12 +72,14 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
             'C' => _ = try r.take(@intCast(len - 4)),
             'Z' => return,
             'E' => {
-                const error_message = try buildMessage(self.allocator, self.reader.interface());
+                var error_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, &self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -97,7 +102,7 @@ pub fn copyToWriter(self: *Connection, table_name: []const u8, writer: anytype) 
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
 
-    var r = self.reader.interface();
+    var r = self.reader.interface;
 
     while (true) {
         const msg_type = try r.takeByte();
@@ -122,12 +127,14 @@ pub fn copyToWriter(self: *Connection, table_name: []const u8, writer: anytype) 
             'C' => _ = try r.take(@intCast(payload_len)),
             'Z' => return,
             'E' => {
-                const error_message = try buildMessage(self.allocator, self.reader.interface());
+                var error_message = try buildMessage(self.allocator, self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -145,10 +152,10 @@ pub fn copyIn(self: *Connection, data: [][]const u8) !void {
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
 
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     while (true) {
-        const msg_type = try self.reader.interface().takeByte();
-        _ = try self.reader.interface().takeInt(i32, .big);
+        const msg_type = try self.reader.interface.takeByte();
+        _ = try self.reader.interface.takeInt(i32, .big);
         switch (msg_type) {
             'G' => {
                 const copy_format: i8 = try reader.takeInt(i8, .big);
@@ -172,12 +179,14 @@ pub fn copyIn(self: *Connection, data: [][]const u8) !void {
                 try parseKeyValuePayload(self);
             },
             'E' => {
-                const error_message = try buildMessage(self.allocator, reader);
+                var error_message = try buildMessage(self.allocator, reader);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, reader);
+                var notice_message = try buildMessage(self.allocator, reader);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -200,7 +209,7 @@ pub fn copyOut(self: *Connection, buf: *std.ArrayList([]const u8)) !void {
     try self.writer.interface.writeAll("COPY TO STDOUT");
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     while (true) {
         const msg_type = try reader.takeByte();
         const payload_len = try reader.takeInt(i32, .big) - 4;
@@ -228,12 +237,14 @@ pub fn copyOut(self: *Connection, buf: *std.ArrayList([]const u8)) !void {
                 parseKeyValuePayload(self);
             },
             'E' => {
-                const error_message = try buildMessage(self.allocator, reader);
+                var error_message = try buildMessage(self.allocator, reader);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, reader);
+                var notice_message = try buildMessage(self.allocator, reader);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
         }

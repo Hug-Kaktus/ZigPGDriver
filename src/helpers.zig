@@ -1,7 +1,7 @@
 const std = @import("std");
 const Connection = @import("connection.zig").Connection;
 
-/// Builds human readable message from server's ErrorResponse or NoticeResponse messages
+/// Builds human readable message from server's ErrorResponse or NoticeResponse messages.
 pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(u8) {
     var field_type: u8 = undefined;
     var message = try std.ArrayList(u8).initCapacity(allocator, 128);
@@ -38,9 +38,11 @@ pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.A
     return message;
 }
 
+/// Parses ParameterStatus message and assigns obtained value of a run-time parameter
+/// to corresponding parameter in the Connection struct.
 pub fn parseKeyValuePayload(self: *Connection) !void {
-    const key = (try self.reader.interface().takeDelimiter(0)).?;
-    const value = (try self.reader.interface().takeDelimiter(0)).?;
+    const key = (try self.reader.interface.takeDelimiter(0)).?;
+    const value = (try self.reader.interface.takeDelimiter(0)).?;
     switch (key.len) {
         8 => {
             self.backend_key_data.TimeZone = value;

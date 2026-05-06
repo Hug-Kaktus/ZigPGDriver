@@ -112,7 +112,7 @@ pub fn bindPreparedStatement(
 ) !BindedPreparedStatement {
     try bindMsg(self, destination_portal, source_prepared_statement, parameter_format_codes, parameter_values, result_column_format_codes);
     try flush(self);
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     while (true) {
         const msg_type = try reader.takeByte();
         _ = try reader.takeInt(i32, .big);
@@ -124,12 +124,14 @@ pub fn bindPreparedStatement(
                 };
             },
             'E' => {
-                const error_message = try buildMessage(self.allocator, self.reader.interface());
+                var error_message = try buildMessage(self.allocator, self.reader.interface);
+                defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -166,20 +168,22 @@ pub fn close(
     try self.writer.interface.writeAll(name);
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
-    const msg_type = try self.reader.interface().takeByte();
-    _ = try self.reader.interface().takeInt(i32, .big);
+    const msg_type = try self.reader.interface.takeByte();
+    _ = try self.reader.interface.takeInt(i32, .big);
     switch (msg_type) {
         '3' => {
             std.debug.print("Close complete\n", .{});
             return;
         },
         'E' => {
-            const error_message = try buildMessage(self.allocator, self.reader.interface());
+            var error_message = try buildMessage(self.allocator, self.reader.interface);
+            defer error_message.deinit(self.allocator);
             std.debug.print("{s}\n", .{error_message.items});
             return error.ServerError;
         },
         'N' => {
-            const notice_message = try buildMessage(self.allocator, self.reader.interface());
+            var notice_message = try buildMessage(self.allocator, self.reader.interface);
+            defer notice_message.deinit(self.allocator);
             std.debug.print("{s}\n", .{notice_message.items});
         },
         else => {
@@ -215,7 +219,7 @@ pub fn prepare(
     try flush(self);
     parameter_types.deinit(self.allocator);
 
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     while (true) {
         const msg_type = try reader.takeByte();
         _ = try reader.takeInt(i32, .big);
@@ -236,12 +240,14 @@ pub fn prepare(
                 }
             },
             'E' => {
-                const err = try buildMessage(self.allocator, reader);
-                std.debug.print("{s}\n", .{err.items});
+                var error_message = try buildMessage(self.allocator, reader);
+                defer error_message.deinit(self.allocator);
+                std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -259,7 +265,7 @@ pub fn executeQuery(
 ) !QueryResult {
     try executeMsg(self, binded_prepared_statement.portal_name, max_rows_number);
     try sync(self);
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
 
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     const a = arena.allocator();
@@ -292,12 +298,14 @@ pub fn executeQuery(
                 };
             },
             'E' => {
-                const err = try buildMessage(a, reader);
-                std.debug.print("{s}\n", .{err.items});
+                var error_message = try buildMessage(a, reader);
+                defer error_message.deinit(self.allocator);
+                std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
@@ -334,7 +342,7 @@ pub fn flushPipeline(self: *Connection) !void {
 }
 
 pub fn readPipeline(self: *Connection) !void {
-    var reader = self.reader.interface();
+    var reader = self.reader.interface;
     var current_query_index = 0;
     var in_error_recovery = false;
     while (current_query_index < self.pending.items.len) {
@@ -380,14 +388,16 @@ pub fn readPipeline(self: *Connection) !void {
                 current_query_index += 1;
             },
             'E' => {
-                const err = try buildMessage(self.allocator, reader);
-                std.debug.print("{s}\n", .{err.items});
-                current.error_message = err.items;
+                var error_message = try buildMessage(self.allocator, reader);
+                defer error_message.deinit(self.allocator);
+                std.debug.print("{s}\n", .{error_message.items});
+                current.error_message = error_message.items;
                 current.state = .failed;
                 in_error_recovery = true;
             },
             'N' => {
-                const notice_message = try buildMessage(self.allocator, self.reader.interface());
+                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
