@@ -2,11 +2,11 @@ const std = @import("std");
 const Connection = @import("connection.zig").Connection;
 
 /// Builds human readable message from server's ErrorResponse or NoticeResponse messages.
-pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(u8) {
+pub fn buildMessage(allocator: std.mem.Allocator, reader: anytype) !std.ArrayList(u8) {
     var field_type: u8 = undefined;
     var message = try std.ArrayList(u8).initCapacity(allocator, 128);
     while (true) {
-        field_type = try reader.takeByte();
+        field_type = try reader.interface.takeByte();
         switch (field_type) {
             'S' => try message.appendSlice(allocator, "Severity: "),
             'V' => try message.appendSlice(allocator, "Severity localized: "),
@@ -28,11 +28,11 @@ pub fn buildMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.A
             'R' => try message.appendSlice(allocator, "Routine: "),
             0 => break,
             else => {
-                _ = try reader.takeDelimiter(0);
+                _ = try reader.interface.takeDelimiter(0);
                 continue;
             },
         }
-        try message.appendSlice(allocator, (try reader.takeDelimiter(0)).?);
+        try message.appendSlice(allocator, (try reader.interface.takeDelimiter(0)).?);
         try message.appendSlice(allocator, "\n");
     }
     return message;

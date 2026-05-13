@@ -15,6 +15,7 @@ const convertValue = types.convertValue;
 const FieldData = types.FieldData;
 const Row = types.Row;
 const QueryResult = types.QueryResult;
+const TypedQueryResult = types.TypedQueryResult;
 
 fn decodeValueText(allocator: std.mem.Allocator, T: PgType, bytes: ?[]const u8) !Value {
     if (bytes == null) return Value.Null;
@@ -54,6 +55,7 @@ fn decodeValueBinary(typ: PgType, bytes: []const u8) !Value {
 }
 
 pub fn decodeRowToStruct(
+    allocator: std.mem.Allocator,
     comptime T: type,
     row: Row,
     fields: []FieldData,
@@ -65,7 +67,21 @@ pub fn decodeRowToStruct(
 
         for (fields, 0..) |col, i| {
             if (std.mem.eql(u8, col.name, field.name)) {
-                @field(result, field.name) = try convertValue(field.type, row.values[i]);
+                // @field(result, field.name) = try convertValue(field.type, row.values[i]);
+                const converted = try convertValue(field.type, row.values[i]);
+                switch (@typeInfo(field.type)) {
+                    .pointer => |ptr| {
+                        if (ptr.size == .slice and ptr.child == u8) {
+                            @field(result, field.name) =
+                                try allocator.dupe(u8, converted);
+                        } else {
+                            @field(result, field.name) = converted;
+                        }
+                    },
+                    else => {
+                        @field(result, field.name) = converted;
+                    },
+                }
                 found = true;
                 break;
             }
@@ -83,20 +99,20 @@ pub fn decodeRowToStruct(
     return result;
 }
 
-pub fn parseFieldData(self: *Connection) !std.ArrayList(FieldData) {
-    var reader = self.reader.interface;
-    const field_number = try reader.takeInt(i16, .big);
-    var array = try std.ArrayList(FieldData).initCapacity(self.allocator, @intCast(field_number));
+pub fn parseFieldData(self: *Connection, allocator: std.mem.Allocator) !std.ArrayList(FieldData) {
+    var r = &self.reader;
+    const field_number = try r.interface.takeInt(i16, .big);
+    var array = try std.ArrayList(FieldData).initCapacity(allocator, @intCast(field_number));
     var k: u16 = 0;
     while (k < field_number) {
-        const name = try self.allocator.dupe(u8, (try reader.takeDelimiter(0)).?);
-        const table_object_id = try reader.takeInt(i32, .big);
-        const column_attribute_number = try reader.takeInt(i16, .big);
-        const data_type_object_id = try reader.takeInt(i32, .big);
-        const data_type_size = try reader.takeInt(i16, .big);
-        const type_modifier = try reader.takeInt(i32, .big);
-        const format_code = try reader.takeInt(i16, .big);
-        try array.append(self.allocator, FieldData{
+        const name = try allocator.dupe(u8, (try r.interface.takeDelimiter(0)).?);
+        const table_object_id = try r.interface.takeInt(i32, .big);
+        const column_attribute_number = try r.interface.takeInt(i16, .big);
+        const data_type_object_id = try r.interface.takeInt(i32, .big);
+        const data_type_size = try r.interface.takeInt(i16, .big);
+        const type_modifier = try r.interface.takeInt(i32, .big);
+        const format_code = try r.interface.takeInt(i16, .big);
+        try array.append(allocator, FieldData{
             .table_object_id = table_object_id,
             .data_type_object_id = data_type_object_id,
             .type_modifier = type_modifier,
@@ -110,14 +126,14 @@ pub fn parseFieldData(self: *Connection) !std.ArrayList(FieldData) {
     return array;
 }
 
-pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
-    var reader = self.reader.interface;
-    const values_number = try reader.takeInt(i16, .big);
-    var values = try self.allocator.alloc(Value, @intCast(values_number));
+pub fn parseRowData(self: *Connection, allocator: std.mem.Allocator, fields: []const FieldData) !Row {
+    var r = &self.reader;
+    const values_number = try r.interface.takeInt(i16, .big);
+    var values = try allocator.alloc(Value, @intCast(values_number));
 
     var k: usize = 0;
     while (k < values_number) : (k += 1) {
-        const value_len: i32 = try reader.takeInt(i32, .big);
+        const value_len: i32 = try r.interface.takeInt(i32, .big);
 
         var raw: ?[]const u8 = null;
 
@@ -125,18 +141,18 @@ pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
             raw = null;
         } else {
             // might be error prone due to buf being const and not var
-            const buf = try self.allocator.alloc(u8, @intCast(value_len));
-            _ = try reader.readSliceShort(buf);
+            const buf = try allocator.alloc(u8, @intCast(value_len));
+            _ = try r.interface.readSliceShort(buf);
             raw = buf;
         }
 
         const T = oidToType(fields[k].data_type_object_id);
         const format = fields[k].format_code;
-        values[k] = try decodeValueText(self.allocator, T, raw);
+        values[k] = try decodeValueText(allocator, T, raw);
         if (raw == null) {
             values[k] = Value.Null;
         } else if (format == 0) {
-            values[k] = try decodeValueText(self.allocator, T, raw);
+            values[k] = try decodeValueText(allocator, T, raw);
         } else {
             values[k] = try decodeValueBinary(T, raw.?);
         }
@@ -146,8 +162,14 @@ pub fn parseRowData(self: *Connection, fields: []const FieldData) !Row {
 }
 
 pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
-    std.debug.print("sql:\n{s}\n", .{sql});
-    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    const arena = try self.allocator.create(std.heap.ArenaAllocator);
+
+    errdefer self.allocator.destroy(arena);
+
+    arena.* = std.heap.ArenaAllocator.init(self.allocator);
+
+    errdefer arena.deinit();
+
     const a = arena.allocator();
     try self.writer.interface.writeByte('Q');
     try self.writer.interface.writeInt(i32, 4 + @as(i32, @intCast(sql.len)) + 1, .big);
@@ -157,19 +179,20 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
 
     var fields: ?std.ArrayList(FieldData) = null;
     var rows = try std.ArrayList(Row).initCapacity(a, 16);
+    var r = &self.reader;
     while (true) {
-        const msg_type = try self.reader.interface.takeByte();
-        _ = try self.reader.interface.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        _ = try r.interface.takeInt(i32, .big);
         switch (msg_type) {
             'T' => {
-                fields = try parseFieldData(self);
+                fields = try parseFieldData(self, a);
             },
             'D' => {
-                const row = try parseRowData(self, fields.?.items);
+                const row = try parseRowData(self, a, fields.?.items);
                 try rows.append(a, row);
             },
             'C' => {
-                const command_tag: []const u8 = (try self.reader.interface.takeDelimiter(0)).?;
+                const command_tag: []const u8 = (try r.interface.takeDelimiter(0)).?;
                 std.debug.print("{s}\n", .{command_tag});
                 return QueryResult{
                     .arena = arena,
@@ -185,7 +208,7 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
                 };
             },
             'Z' => {
-                _ = try self.reader.interface.takeByte();
+                _ = try r.interface.takeByte();
                 return QueryResult{
                     .arena = arena,
                     .fields = if (fields) |f| f else try std.ArrayList(FieldData).initCapacity(a, 0),
@@ -193,13 +216,13 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
                 };
             },
             'E' => {
-                var error_message = try buildMessage(a, self.reader.interface);
+                var error_message = try buildMessage(a, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(a, self.reader.interface);
+                var notice_message = try buildMessage(a, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -215,20 +238,25 @@ pub fn queryTyped(
     self: *Connection,
     comptime T: type,
     sql: []const u8,
-) !std.ArrayList(T) {
+) !TypedQueryResult(T) {
     var result = try queryUntyped(self, sql);
-    defer result.deinit();
+    errdefer result.deinit(self.allocator);
 
-    var out = try std.ArrayList(T).initCapacity(self.allocator, 128);
+    const arena_allocator = result.arena.allocator();
+
+    var out = try std.ArrayList(T).initCapacity(arena_allocator, 128);
 
     for (result.rows.items) |row| {
         const obj = try decodeRowToStruct(
+            arena_allocator,
             T,
             row,
             result.fields.items,
         );
-        try out.append(self.allocator, obj);
+        try out.append(arena_allocator, obj);
     }
-
-    return out;
+    return TypedQueryResult(T){
+        .arena = result.arena,
+        .rows = out,
+    };
 }

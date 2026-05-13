@@ -1,6 +1,5 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
-const buildMessage = helpers.buildMessage;
 const startup = @import("startup.zig").startup;
 const types = @import("types.zig");
 const PendingQuery = types.PendingQuery;
@@ -85,10 +84,9 @@ pub const Connection = struct {
         };
         connection.reader = stream.reader(io, &connection.rbuf);
         connection.writer = stream.writer(io, &connection.wbuf);
-        std.debug.print("rbuf addr (inside): {*}\n", .{&connection.rbuf});
         errdefer connection.close();
 
-        try startup(&connection, user, password, database, replication);
+        try startup(connection, user, password, database, replication);
         return connection;
     }
 

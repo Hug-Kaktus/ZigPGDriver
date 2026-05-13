@@ -2,7 +2,7 @@ const std = @import("std");
 const Connection = @import("connection.zig").Connection;
 
 const query = @import("query.zig");
-const queryWithFields = query.queryWithFields;
+const queryUntyped = query.queryUntyped;
 const queryTyped = query.queryTyped;
 
 const extended_query = @import("extended_query.zig");
@@ -47,16 +47,33 @@ pub fn main(init: std.process.Init) !void {
         conn.close();
         gpa.destroy(conn);
     }
-    std.debug.print("rbuf addr (outside): {*}\n", .{&conn.rbuf});
+    // const Employee = struct {
+    //     employee_id: i32,
+    //     first_name: []const u8,
+    //     last_name: []const u8,
+    // };
+    // var employees_result = try queryTyped(conn, Employee, "SELECT employee_id, first_name, last_name FROM employee");
+    // defer employees_result.deinit();
+
+    // for (employees_result.rows.items) |e| {
+    //     std.debug.print("{d} {s} {s}\n", .{ e.employee_id, e.first_name, e.last_name });
+    // }
+
     // var options = try std.ArrayList(PluginOption).initCapacity(allocator, 8);
     // try options.append(allocator, .{.name = "proto_version", .value = "4"});
     // try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
     // try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
-    var file = try std.Io.Dir.cwd().openFile(io, "data.csv", .{});
+    var file = try std.Io.Dir.cwd().createFile(io, "out.csv", .{});
     defer file.close(io);
-    const buf: []u8 = try conn.allocator.alloc(u8, 4096);
-    defer conn.allocator.free(buf);
+    // const buf: []u8 = try conn.allocator.alloc(u8, 4096);
+    // defer conn.allocator.free(buf);
 
-    var reader = file.reader(io, buf);
-    try copyFromReader(conn, "employee", &reader);
+    // var file = try std.fs.cwd().createFile("out.csv", .{});
+    var buf: [4096]u8 = undefined;
+
+    var writer = file.writer(io, &buf);
+    try copyToWriter(conn, "employee", &writer);
+
+    // var reader = file.reader(io, buf);
+    // try copyFromReader(conn, "employee", &reader);
 }

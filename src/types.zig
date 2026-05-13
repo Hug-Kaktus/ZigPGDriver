@@ -133,16 +133,31 @@ pub const Row = struct {
 };
 
 pub const QueryResult = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
     fields: std.ArrayList(FieldData),
     rows: std.ArrayList(Row),
 
-    pub fn deinit(self: *QueryResult) void {
+    pub fn deinit(self: *QueryResult, allocator: std.mem.Allocator) void {
         self.arena.deinit();
+        allocator.destroy(self.arena);
+        // allocator.destroy(self);
     }
 };
 
+pub fn TypedQueryResult(comptime T: type) type {
+    return struct {
+        arena: *std.heap.ArenaAllocator,
+        rows: std.ArrayList(T),
+
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            self.arena.deinit();
+            allocator.destroy(self.arena);
+        }
+    };
+}
+
 pub const PreparedStatement = struct {
+    arena: *std.heap.ArenaAllocator,
     name: []const u8,
     fields: std.ArrayList(FieldData),
     parameter_count: i32,
@@ -159,6 +174,12 @@ pub const PreparedStatement = struct {
         for (self.parameters.items, 1..) |parameter, i| {
             std.debug.print("{d}. {s}\n", .{ i, @tagName(oidToType(parameter)) });
         }
+    }
+
+    pub fn deinit(self: *PreparedStatement, allocator: std.mem.Allocator) void {
+        self.arena.deinit();
+        allocator.destroy(self.arena);
+        allocator.destroy(self);
     }
 };
 

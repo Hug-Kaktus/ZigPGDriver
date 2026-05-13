@@ -15,6 +15,7 @@ const convertValue = types.convertValue;
 const FieldData = types.FieldData;
 const Row = types.Row;
 const QueryResult = types.QueryResult;
+const TypedQueryResult = types.TypedQueryResult;
 const PreparedStatement = types.PreparedStatement;
 const BindedPreparedStatement = types.BindedPreparedStatement;
 const PendingQuery = types.PendingQuery;
@@ -109,28 +110,32 @@ pub fn bindPreparedStatement(
     parameter_format_codes: std.ArrayList(i16),
     parameter_values: std.ArrayList(ParameterValue),
     result_column_format_codes: std.ArrayList(i16),
-) !BindedPreparedStatement {
+) !*BindedPreparedStatement {
     try bindMsg(self, destination_portal, source_prepared_statement, parameter_format_codes, parameter_values, result_column_format_codes);
     try flush(self);
-    var reader = self.reader.interface;
+    var r = &self.reader;
     while (true) {
-        const msg_type = try reader.takeByte();
-        _ = try reader.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        _ = try r.interface.takeInt(i32, .big);
         switch (msg_type) {
             '2' => {
-                return BindedPreparedStatement{
-                    .prepared_statement = source_prepared_statement,
-                    .portal_name = destination_portal,
-                };
+                var binded_prepared_statement = try self.allocator.create(BindedPreparedStatement);
+                binded_prepared_statement.prepared_statement = source_prepared_statement;
+                binded_prepared_statement.portal_name = destination_portal;
+                return binded_prepared_statement;
+                // return &BindedPreparedStatement{
+                //     .prepared_statement = source_prepared_statement,
+                //     .portal_name = destination_portal,
+                // };
             },
             'E' => {
-                var error_message = try buildMessage(self.allocator, self.reader.interface);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -168,21 +173,22 @@ pub fn close(
     try self.writer.interface.writeAll(name);
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
-    const msg_type = try self.reader.interface.takeByte();
-    _ = try self.reader.interface.takeInt(i32, .big);
+    var r = &self.reader;
+    const msg_type = try r.interface.takeByte();
+    _ = try r.interface.takeInt(i32, .big);
     switch (msg_type) {
         '3' => {
             std.debug.print("Close complete\n", .{});
             return;
         },
         'E' => {
-            var error_message = try buildMessage(self.allocator, self.reader.interface);
+            var error_message = try buildMessage(self.allocator, r);
             defer error_message.deinit(self.allocator);
             std.debug.print("{s}\n", .{error_message.items});
             return error.ServerError;
         },
         'N' => {
-            var notice_message = try buildMessage(self.allocator, self.reader.interface);
+            var notice_message = try buildMessage(self.allocator, r);
             defer notice_message.deinit(self.allocator);
             std.debug.print("{s}\n", .{notice_message.items});
         },
@@ -207,46 +213,60 @@ pub fn prepare(
     name: []const u8,
     sql: []const u8,
     parameter_types: *std.ArrayList(i32),
-) !PreparedStatement {
-    var prepared_statement = PreparedStatement{
-        .name = name,
-        .fields = undefined,
-        .parameter_count = undefined,
-        .parameters = undefined,
-    };
+) !*PreparedStatement {
+    defer parameter_types.deinit(self.allocator);
+
+    const arena = try self.allocator.create(std.heap.ArenaAllocator);
+    errdefer self.allocator.destroy(arena);
+
+    arena.* = std.heap.ArenaAllocator.init(self.allocator);
+    errdefer arena.deinit();
+
+    // var arena = std.heap.ArenaAllocator.init(self.allocator);
+    // errdefer arena.deinit();
+    const arena_allocator = arena.allocator();
+    var prepared_statement = try self.allocator.create(PreparedStatement);
+    prepared_statement.arena = arena;
+    prepared_statement.name = name;
+    // var prepared_statement = PreparedStatement{
+    //     .arena = arena,
+    //     .name = name,
+    //     .fields = undefined,
+    //     .parameter_count = undefined,
+    //     .parameters = undefined,
+    // };
 
     try parseMsg(self, name, sql, parameter_types);
     try flush(self);
-    parameter_types.deinit(self.allocator);
 
-    var reader = self.reader.interface;
+    var r = &self.reader;
     while (true) {
-        const msg_type = try reader.takeByte();
-        _ = try reader.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        _ = try r.interface.takeInt(i32, .big);
         switch (msg_type) {
             '1' => {
                 try describe(self, 'S', name);
                 try flush(self);
             },
             'T' => {
-                prepared_statement.fields = try parseFieldData(self);
+                prepared_statement.fields = try parseFieldData(self, arena_allocator);
                 return prepared_statement;
             },
             't' => {
-                prepared_statement.parameters = try std.ArrayList(i32).initCapacity(self.allocator, 4);
-                prepared_statement.parameter_count = try reader.takeInt(i16, .big);
+                prepared_statement.parameters = try std.ArrayList(i32).initCapacity(arena_allocator, 4);
+                prepared_statement.parameter_count = try r.interface.takeInt(i16, .big);
                 for (0..@intCast(prepared_statement.parameter_count)) |_| {
-                    try prepared_statement.parameters.append(self.allocator, try reader.takeInt(i32, .big));
+                    try prepared_statement.parameters.append(arena_allocator, try r.interface.takeInt(i32, .big));
                 }
             },
             'E' => {
-                var error_message = try buildMessage(self.allocator, reader);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -265,25 +285,25 @@ pub fn executeQuery(
 ) !QueryResult {
     try executeMsg(self, binded_prepared_statement.portal_name, max_rows_number);
     try sync(self);
-    var reader = self.reader.interface;
+    var r = &self.reader;
 
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     const a = arena.allocator();
     var rows = try std.ArrayList(Row).initCapacity(a, 8);
 
     while (true) {
-        const msg_type = try reader.takeByte();
-        _ = try reader.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        _ = try r.interface.takeInt(i32, .big);
         switch (msg_type) {
             'D' => {
-                const row = try parseRowData(self, binded_prepared_statement.prepared_statement.fields.items);
-                try rows.append(self.allocator, row);
+                const row = try parseRowData(self, a, binded_prepared_statement.prepared_statement.fields.items);
+                try rows.append(a, row);
             },
             'C' => {
-                _ = try reader.takeDelimiter(0);
+                _ = try r.interface.takeDelimiter(0);
             },
             'Z' => {
-                _ = try reader.takeByte();
+                _ = try r.interface.takeByte();
                 return QueryResult{
                     .arena = arena,
                     .fields = binded_prepared_statement.prepared_statement.fields,
@@ -298,13 +318,13 @@ pub fn executeQuery(
                 };
             },
             'E' => {
-                var error_message = try buildMessage(a, reader);
+                var error_message = try buildMessage(a, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -321,19 +341,31 @@ pub fn executeQueryTyped(
     comptime T: type,
     binded_prepared_statement: *const BindedPreparedStatement,
     max_rows_number: i32,
-) !std.ArrayList(T) {
+) !TypedQueryResult(T) {
     var result = try executeQuery(self, binded_prepared_statement, max_rows_number);
-    defer result.deinit();
-    var out = try std.ArrayList(T).initCapacity(self.allocator, 8);
+
+    const arena_allocator = result.arena.allocator();
+
+    var out = try std.ArrayList(T).initCapacity(arena_allocator, 8);
     for (result.rows.items) |row| {
-        const obj = try decodeRowToStruct(T, row, result.fields.items);
-        try out.append(self.allocator, obj);
+        const obj = try decodeRowToStruct(arena_allocator, T, row, result.fields.items);
+        try out.append(arena_allocator, obj);
     }
-    return out;
+    return TypedQueryResult(T){
+        .arena = result.arena,
+        .rows = out,
+    };
 }
 
 pub fn sendStatement(self: *Connection, prepared_statement: PreparedStatement, params: std.ArrayList(ParameterValue)) !void {
-    try bindMsg(self, "", prepared_statement.name, std.ArrayList(i32).initCapacity(self.allocator, 0), params, std.ArrayList(i16).initCapacity(self.allocator, 0));
+    try bindMsg(
+        self,
+        "",
+        prepared_statement.name,
+        std.ArrayList(i32).initCapacity(self.allocator, 0),
+        params,
+        std.ArrayList(i16).initCapacity(self.allocator, 0),
+    );
     try executeMsg(self, "", 0);
 }
 
@@ -342,16 +374,16 @@ pub fn flushPipeline(self: *Connection) !void {
 }
 
 pub fn readPipeline(self: *Connection) !void {
-    var reader = self.reader.interface;
+    var r = &self.reader;
     var current_query_index = 0;
     var in_error_recovery = false;
     while (current_query_index < self.pending.items.len) {
-        const msg_type = try reader.takeByte();
-        const msg_len = try reader.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        const msg_len = try r.interface.takeInt(i32, .big);
 
         if (in_error_recovery) {
             if (msg_type == 'Z') {
-                _ = try reader.takeByte();
+                _ = try r.interface.takeByte();
                 for (self.pending.items[current_query_index..]) |*q| {
                     if (q.state == .pending) {
                         q.state = .skipped;
@@ -359,15 +391,15 @@ pub fn readPipeline(self: *Connection) !void {
                 }
                 break;
             } else {
-                try reader.take(msg_len - 4);
+                try r.interface.take(msg_len - 4);
                 continue;
             }
         }
 
         var current = &self.pending.items[current_query_index];
         switch (msg_type) {
-            '1' => try reader.take(msg_len - 4),
-            '2' => try reader.take(msg_len - 4),
+            '1' => try r.interface.take(msg_len - 4),
+            '2' => try r.interface.take(msg_len - 4),
             'D' => {
                 if (current.prepared_statement.fields) |f| {
                     const row = try parseRowData(self, f.items);
@@ -377,18 +409,18 @@ pub fn readPipeline(self: *Connection) !void {
                 }
             },
             'C' => {
-                try reader.take(msg_len - 4);
+                try r.interface.take(msg_len - 4);
                 current.state = .done;
             },
             'Z' => {
-                _ = try reader.takeByte();
+                _ = try r.interface.takeByte();
                 if (current.state == .pending) {
                     current.state = .done;
                 }
                 current_query_index += 1;
             },
             'E' => {
-                var error_message = try buildMessage(self.allocator, reader);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 current.error_message = error_message.items;
@@ -396,7 +428,7 @@ pub fn readPipeline(self: *Connection) !void {
                 in_error_recovery = true;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },

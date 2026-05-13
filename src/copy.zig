@@ -16,32 +16,31 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
 
-    var r = self.reader.interface;
+    var r = &self.reader;
 
     while (true) {
-        std.debug.print("hello\n", .{});
-        const msg_type = try r.takeByte();
-        _ = try r.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        _ = try r.interface.takeInt(i32, .big);
 
         switch (msg_type) {
             'G' => {
-                _ = try r.takeInt(i8, .big);
-                const cols = try r.takeInt(i16, .big);
+                _ = try r.interface.takeInt(i8, .big);
+                const cols = try r.interface.takeInt(i16, .big);
 
                 for (0..@intCast(cols)) |_| {
-                    _ = try r.takeInt(i16, .big);
+                    _ = try r.interface.takeInt(i16, .big);
                 }
                 break;
             },
             'S' => try parseKeyValuePayload(self),
             'E' => {
-                var error_message = try buildMessage(self.allocator, &self.reader.interface);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, &self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -65,20 +64,20 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
     try copyDone(self);
 
     while (true) {
-        const msg_type = try r.takeByte();
-        const len = try r.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        const len = try r.interface.takeInt(i32, .big);
 
         switch (msg_type) {
-            'C' => _ = try r.take(@intCast(len - 4)),
+            'C' => _ = try r.interface.take(@intCast(len - 4)),
             'Z' => return,
             'E' => {
-                var error_message = try buildMessage(self.allocator, &self.reader.interface);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, &self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
@@ -102,150 +101,44 @@ pub fn copyToWriter(self: *Connection, table_name: []const u8, writer: anytype) 
     try self.writer.interface.writeByte(0);
     try self.writer.interface.flush();
 
-    var r = self.reader.interface;
+    var r = &self.reader;
 
     while (true) {
-        const msg_type = try r.takeByte();
-        const len = try r.takeInt(i32, .big);
+        const msg_type = try r.interface.takeByte();
+        const len = try r.interface.takeInt(i32, .big);
         const payload_len = len - 4;
 
         switch (msg_type) {
             'H' => {
-                _ = try r.takeInt(i8, .big);
-                const cols = try r.takeInt(i16, .big);
+                _ = try r.interface.takeInt(i8, .big);
+                const cols = try r.interface.takeInt(i16, .big);
 
                 for (0..@intCast(cols)) |_| {
-                    _ = try r.takeInt(i16, .big);
+                    _ = try r.interface.takeInt(i16, .big);
                 }
             },
             'd' => {
-                const data = try r.take(@intCast(payload_len));
+                const data = try r.interface.take(@intCast(payload_len));
                 try writer.interface.writeAll(data);
                 try writer.interface.flush();
             },
             'c' => {},
-            'C' => _ = try r.take(@intCast(payload_len)),
+            'C' => _ = try r.interface.take(@intCast(payload_len)),
             'Z' => return,
             'E' => {
-                var error_message = try buildMessage(self.allocator, self.reader.interface);
+                var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
-                var notice_message = try buildMessage(self.allocator, self.reader.interface);
+                var notice_message = try buildMessage(self.allocator, r);
                 defer notice_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {
                 std.debug.print("Unsupported message type: {c}\n", .{msg_type});
                 return error.UnknownMessageType;
-            },
-        }
-    }
-}
-
-pub fn copyIn(self: *Connection, data: [][]const u8) !void {
-    try self.writer.interface.writeByte('Q');
-    try self.writer.interface.writeInt(i32, 4 + 15 + 1, .big);
-    try self.writer.interface.writeAll("COPY FROM STDIN");
-    try self.writer.interface.writeByte(0);
-    try self.writer.interface.flush();
-
-    var reader = self.reader.interface;
-    while (true) {
-        const msg_type = try self.reader.interface.takeByte();
-        _ = try self.reader.interface.takeInt(i32, .big);
-        switch (msg_type) {
-            'G' => {
-                const copy_format: i8 = try reader.takeInt(i8, .big);
-                std.debug.print("copy_format: {d}\n", .{copy_format});
-                const number_of_columns = try reader.takeInt(i16, .big);
-                var format_codes = try std.ArrayList(i16).initCapacity(self.allocator, @intCast(number_of_columns));
-                defer format_codes.deinit(self.allocator);
-                for (0..@intCast(number_of_columns)) |_| {
-                    try format_codes.append(self.allocator, try reader.takeInt(i16, .big));
-                }
-                if (data.len > 0) {
-                    copyIn(self, data) catch {
-                        try copyFail(self, "An unexpected error occured.");
-                    };
-                } else {
-                    return error.NoCopyInData;
-                }
-                try copyDone(self);
-            },
-            'S' => {
-                try parseKeyValuePayload(self);
-            },
-            'E' => {
-                var error_message = try buildMessage(self.allocator, reader);
-                defer error_message.deinit(self.allocator);
-                std.debug.print("{s}\n", .{error_message.items});
-                return error.ServerError;
-            },
-            'N' => {
-                var notice_message = try buildMessage(self.allocator, reader);
-                defer notice_message.deinit(self.allocator);
-                std.debug.print("{s}\n", .{notice_message.items});
-            },
-            else => {
-                std.debug.print("Unknown message type: {c}\n", .{msg_type});
-                return error.UnknownMessageType;
-            },
-        }
-    }
-    for (data) |row| {
-        try self.writer.interface.writeByte('d');
-        try self.writer.interface.writeInt(i32, 4 + @as(i32, @intCast(row.len)), .big);
-        _ = try self.writer.interface.write(row);
-        try self.writer.interface.flush();
-    }
-}
-
-pub fn copyOut(self: *Connection, buf: *std.ArrayList([]const u8)) !void {
-    try self.writer.interface.writeByte('Q');
-    try self.writer.interface.writeInt(i32, 4 + 14 + 1, .big);
-    try self.writer.interface.writeAll("COPY TO STDOUT");
-    try self.writer.interface.writeByte(0);
-    try self.writer.interface.flush();
-    var reader = self.reader.interface;
-    while (true) {
-        const msg_type = try reader.takeByte();
-        const payload_len = try reader.takeInt(i32, .big) - 4;
-        switch (msg_type) {
-            'H' => {
-                const copy_format: i8 = try reader.takeInt(i8, .big);
-                std.debug.print("copy_format: {d}\n", .{copy_format});
-                const number_of_columns = try reader.takeInt(i16, .big);
-                const format_codes = try std.ArrayList(i16).initCapacity(self.allocator, @intCast(number_of_columns));
-                defer format_codes.deinit(self.allocator);
-                for (0..number_of_columns) |_| {
-                    format_codes.append(reader.takeInt(i16, .big));
-                }
-
-                try copyDone(self);
-            },
-            'd' => {
-                buf.append(self.allocator, reader.take(@intCast(payload_len)));
-            },
-            'c' => {
-                std.debug.print("Copy out done.\n", .{});
-                return;
-            },
-            'S' => {
-                parseKeyValuePayload(self);
-            },
-            'E' => {
-                var error_message = try buildMessage(self.allocator, reader);
-                defer error_message.deinit(self.allocator);
-                std.debug.print("{s}\n", .{error_message.items});
-                return error.ServerError;
-            },
-            'N' => {
-                var notice_message = try buildMessage(self.allocator, reader);
-                defer notice_message.deinit(self.allocator);
-                std.debug.print("{s}\n", .{notice_message.items});
             },
         }
     }
