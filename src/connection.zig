@@ -2,6 +2,7 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const startup = @import("startup.zig").startup;
 const types = @import("types.zig");
+const RingQueue = types.RingQueue;
 const PendingQuery = types.PendingQuery;
 const ScramState = types.ScramState;
 
@@ -31,8 +32,8 @@ pub const Connection = struct {
     wbuf: [4096]u8,
     reader: std.Io.net.Stream.Reader,
     writer: std.Io.net.Stream.Writer,
-    pending: std.ArrayList(PendingQuery),
-
+    pending: RingQueue(*PendingQuery),
+    completed: RingQueue(*PendingQuery),
     user: []const u8,
     scram_state: ?ScramState,
     oauth_token: ?[]const u8,
@@ -55,8 +56,7 @@ pub const Connection = struct {
         database: []const u8,
         replication: []const u8,
     ) !*Connection {
-        const ip4 = try std.Io.net.Ip4Address.parse(host, port);
-        var addr = std.Io.net.IpAddress{ .ip4 = ip4 };
+        var addr = try std.Io.net.IpAddress.parse(host, port);
         var stream = try std.Io.net.IpAddress.connect(&addr, io, .{ .mode = .stream });
 
         var connection = try allocator.create(Connection);
@@ -68,7 +68,14 @@ pub const Connection = struct {
             .wbuf = undefined,
             .reader = undefined,
             .writer = undefined,
-            .pending = try std.ArrayList(PendingQuery).initCapacity(allocator, 8),
+            .pending = try RingQueue(*PendingQuery).init(
+                allocator,
+                8,
+            ),
+            .completed = try RingQueue(*PendingQuery).init(
+                allocator,
+                8,
+            ),
 
             .user = user,
             .scram_state = null,
@@ -91,7 +98,14 @@ pub const Connection = struct {
     }
 
     pub fn close(self: *Connection) void {
-        self.pending.deinit(self.allocator);
+        while (self.pending.pop()) |p| {
+            p.deinit(self.allocator);
+        }
+        while (self.completed.pop()) |p| {
+            p.deinit(self.allocator);
+        }
+        self.pending.deinit();
+        self.completed.deinit();
         self.stream.close(self.io);
         if (self.scram_state) |*value| {
             value.*.deinit(self.allocator);

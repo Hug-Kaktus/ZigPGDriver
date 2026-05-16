@@ -10,6 +10,10 @@ const prepare = extended_query.prepare;
 const bindPreparedStatement = extended_query.bindPreparedStatement;
 const executeQuery = extended_query.executeQuery;
 const executeQueryTyped = extended_query.executeQueryTyped;
+const sendStatement = extended_query.sendStatement;
+const flushPipeline = extended_query.flushPipeline;
+const readPipeline = extended_query.readPipeline;
+const consume = extended_query.consume;
 const ParameterValue = extended_query.ParameterValue;
 
 const replication = @import("replication.zig");
@@ -79,7 +83,7 @@ test "simple query typed" {
         last_name: []const u8,
     };
     var employees_result = try queryTyped(conn, Employee, "SELECT employee_id, first_name, last_name FROM employee");
-    defer employees_result.deinit();
+    defer employees_result.deinit(conn.allocator);
 
     for (employees_result.rows.items) |e| {
         std.debug.print("{d} {s} {s}\n", .{ e.employee_id, e.first_name, e.last_name });
@@ -111,7 +115,7 @@ test "create table" {
     query_result.deinit(conn.allocator);
 }
 
-test "drop table" {
+test "salary" {
     var conn = try Connection.connect(
         std.testing.allocator,
         std.testing.io,
@@ -126,8 +130,68 @@ test "drop table" {
         conn.close();
         std.testing.allocator.destroy(conn);
     }
-    var query_result = try queryUntyped(conn, "DROP TABLE employee;");
-    query_result.deinit(conn.allocator);
+    var query_result = try queryUntyped(conn,
+        \\ CREATE TABLE salary (
+        \\ salary_id SERIAL PRIMARY KEY,
+        \\ employee_id INT REFERENCES employee(employee_id),
+        \\ amount INT NOT NULL
+        \\ );
+    );
+    defer query_result.deinit(conn.allocator);
+}
+
+test "join" {
+    var conn = try Connection.connect(
+        std.testing.allocator,
+        std.testing.io,
+        "127.0.0.1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "false",
+    );
+    defer {
+        conn.close();
+        std.testing.allocator.destroy(conn);
+    }
+    var query_result = try queryUntyped(conn,
+        \\ SELECT 
+        \\     e.first_name, 
+        \\     e.last_name, 
+        \\     s.amount AS annual_salary
+        \\ FROM employee e
+        \\ JOIN salary s ON e.employee_id = s.employee_id;
+    );
+    defer query_result.deinit(conn.allocator);
+    for (query_result.rows.items) |row| {
+        const first_name = try row.getAs([]const u8, query_result.fields.items, "first_name");
+        const last_name = try row.getAs([]const u8, query_result.fields.items, "last_name");
+        const annual_salary = try row.getAs(i32, query_result.fields.items, "amount");
+
+        std.debug.print("{s} {s}, {d}\n", .{ first_name, last_name, annual_salary });
+    }
+}
+
+test "drop tables" {
+    var conn = try Connection.connect(
+        std.testing.allocator,
+        std.testing.io,
+        "127.0.0.1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "false",
+    );
+    defer {
+        conn.close();
+        std.testing.allocator.destroy(conn);
+    }
+    var query_result = try queryUntyped(conn, "DROP TABLE IF EXISTS employee;");
+    var query_result2 = try queryUntyped(conn, "DROP TABLE IF EXISTS salary;");
+    defer query_result.deinit(conn.allocator);
+    defer query_result2.deinit(conn.allocator);
 }
 
 test "insert" {
@@ -154,7 +218,31 @@ test "insert" {
         \\('Viktoriia', 'Polyakova'),
         \\('Artem', 'Bondar');
     );
-    query_result.deinit(conn.allocator);
+    defer query_result.deinit(conn.allocator);
+}
+
+test "salary insert" {
+    var conn = try Connection.connect(
+        std.testing.allocator,
+        std.testing.io,
+        "127.0.0.1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "false",
+    );
+    defer {
+        conn.close();
+        std.testing.allocator.destroy(conn);
+    }
+    var query_result = try queryUntyped(conn,
+        \\INSERT INTO salary (employee_id, amount) VALUES
+        \\(1, 65000),
+        \\(2, 78500),
+        \\(3, 52000);
+    );
+    defer query_result.deinit(conn.allocator);
 }
 
 test "remove all entries" {
@@ -174,6 +262,23 @@ test "remove all entries" {
     }
     var query_result = try queryUntyped(conn, "DELETE FROM employee");
     defer query_result.deinit(conn.allocator);
+}
+
+test "give test data" {
+    var conn = try Connection.connect(
+        std.testing.allocator,
+        std.testing.io,
+        "::1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "false",
+    );
+    defer {
+        conn.close();
+        std.testing.allocator.destroy(conn);
+    }
 }
 
 test "extended query untyped" {
@@ -213,7 +318,7 @@ test "extended query untyped" {
     defer conn.allocator.destroy(binded_prepared_statement);
 
     var query_result = try executeQuery(conn, binded_prepared_statement, 0);
-    defer query_result.deinit();
+    defer query_result.deinit(conn.allocator);
     for (query_result.rows.items) |row| {
         const id = try row.getAs(i32, query_result.fields.items, "employee_id");
         const first_name = try row.getAs([]const u8, query_result.fields.items, "first_name");
@@ -262,9 +367,57 @@ test "extended query typed" {
     defer conn.allocator.destroy(binded_prepared_statement);
 
     var employees_result = try executeQueryTyped(conn, Employee, binded_prepared_statement, 0);
-    defer employees_result.deinit();
+    defer employees_result.deinit(conn.allocator);
     for (employees_result.rows.items) |e| {
         std.debug.print("{d} {s} {s}\n", .{ e.employee_id, e.first_name, e.last_name });
+    }
+}
+
+test "pipelining" {
+    var conn = try Connection.connect(
+        std.testing.allocator,
+        std.testing.io,
+        "127.0.0.1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "false",
+    );
+    defer {
+        conn.close();
+        std.testing.allocator.destroy(conn);
+    }
+    var param_types = try std.ArrayList(i32).initCapacity(conn.allocator, 4);
+    try param_types.append(conn.allocator, 0);
+    const stmt = try prepare(conn, "test_statement", "SELECT * FROM employee WHERE employee_id = $1", &param_types);
+    defer stmt.deinit(conn.allocator);
+    for (1..6) |i| {
+        var values = try std.ArrayList(ParameterValue).initCapacity(conn.allocator, 1);
+        defer values.deinit(conn.allocator);
+
+        var buf: [20]u8 = undefined;
+        const str = try std.fmt.bufPrint(&buf, "{d}", .{i});
+
+        try values.append(conn.allocator, ParameterValue{
+            .length = @intCast(str.len),
+            .value = str,
+        });
+
+        try sendStatement(conn, stmt, values);
+    }
+    try flushPipeline(conn);
+    try readPipeline(conn);
+    for (1..6) |_| {
+        const q = try consume(conn);
+        defer q.deinit(conn.allocator);
+        for (q.rows.items) |row| {
+            const id = try row.getAs(i32, q.prepared_statement.fields.items, "employee_id");
+            const first_name = try row.getAs([]const u8, q.prepared_statement.fields.items, "first_name");
+            const last_name = try row.getAs([]const u8, q.prepared_statement.fields.items, "last_name");
+
+            std.debug.print("{} {s} {s}\n", .{ id, first_name, last_name });
+        }
     }
 }
 
@@ -348,7 +501,10 @@ test "create publication" {
         "test",
         "database",
     );
-    defer replication_conn.close();
+    defer {
+        replication_conn.close();
+        std.testing.allocator.destroy(replication_conn);
+    }
     try createPublication(replication_conn, "test_publication");
 }
 
@@ -389,7 +545,7 @@ test "start logical replication" {
     defer options.deinit(std.testing.allocator);
     try options.append(std.testing.allocator, .{ .name = "proto_version", .value = "4" });
     try options.append(std.testing.allocator, .{ .name = "publication_names", .value = "test_pub" });
-    try startLogicalReplication(replication_conn, "test_logical_slot", "0/0", options);
+    try startLogicalReplication(replication_conn, "test_logical_slot", "0/0", &options);
 }
 
 test "drop replication slot" {

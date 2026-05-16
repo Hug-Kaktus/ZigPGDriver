@@ -201,11 +201,18 @@ const QueryState = enum {
 };
 
 pub const PendingQuery = struct {
-    arena: std.heap.ArenaAllocator,
-    prepared_statement: PreparedStatement,
+    arena: *std.heap.ArenaAllocator,
+    prepared_statement: *PreparedStatement,
     rows: std.ArrayList(Row),
     state: QueryState,
     error_message: ?[]u8,
+
+    pub fn deinit(self: *PendingQuery, allocator: std.mem.Allocator) void {
+        self.rows.deinit(self.arena.allocator());
+        self.arena.deinit();
+        allocator.destroy(self.arena);
+        allocator.destroy(self);
+    }
 };
 
 pub const Data = struct {
@@ -221,3 +228,94 @@ pub const Data = struct {
         std.debug.print("sourcefile: {s}\n", .{self.sourcefile});
     }
 };
+
+pub fn RingQueue(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        allocator: std.mem.Allocator,
+        items: []T,
+        head: usize,
+        tail: usize,
+        count: usize,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            cap: usize,
+        ) !Self {
+            return .{
+                .allocator = allocator,
+                .items = try allocator.alloc(T, cap),
+                .head = 0,
+                .tail = 0,
+                .count = 0,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.allocator.free(self.items);
+        }
+
+        pub fn len(self: *const Self) usize {
+            return self.count;
+        }
+
+        pub fn capacity(self: *const Self) usize {
+            return self.items.len;
+        }
+
+        pub fn isEmpty(self: *const Self) bool {
+            return self.count == 0;
+        }
+
+        pub fn isFull(self: *const Self) bool {
+            return self.count == self.items.len;
+        }
+
+        pub fn push(self: *Self, item: T) !void {
+            if (self.isFull()) {
+                try self.resize(self.items.len * 2);
+            }
+
+            self.items[self.tail] = item;
+            self.tail = (self.tail + 1) % self.items.len;
+            self.count += 1;
+        }
+
+        pub fn pop(self: *Self) ?T {
+            if (self.isEmpty()) {
+                return null;
+            }
+
+            const item = self.items[self.head];
+
+            self.head = (self.head + 1) % self.items.len;
+            self.count -= 1;
+
+            return item;
+        }
+
+        pub fn peek(self: *Self) ?T {
+            if (self.isEmpty()) {
+                return null;
+            }
+
+            return self.items[self.head];
+        }
+
+        pub fn resize(self: *Self, new_capacity: usize) !void {
+            const new_buffer = try self.allocator.alloc(T, new_capacity);
+
+            for (0..self.count) |i| {
+                new_buffer[i] =
+                    self.items[(self.head + i) % self.items.len];
+            }
+
+            self.allocator.free(self.items);
+
+            self.items = new_buffer;
+            self.head = 0;
+            self.tail = self.count;
+        }
+    };
+}

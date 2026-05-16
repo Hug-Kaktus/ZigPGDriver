@@ -234,14 +234,14 @@ pub fn dropPublication(self: *Connection, name: []const u8) !void {
     try sql.appendSlice(self.allocator, "DROP PUBLICATION ");
     try sql.appendSlice(self.allocator, name);
     var query_result = try queryUntyped(self, sql.items);
-    query_result.deinit(self.allocator);
+    defer query_result.deinit(self.allocator);
 }
 
 pub fn startLogicalReplication(
     self: *Connection,
     slot_name: []const u8,
     start_lsn: []const u8,
-    plugin_options: ?std.ArrayList(PluginOption),
+    plugin_options: ?*std.ArrayList(PluginOption),
 ) !void {
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 128);
     defer sql.deinit(self.allocator);
@@ -275,9 +275,8 @@ pub fn startLogicalReplication(
     try self.writer.interface.flush();
 
     var r = &self.reader;
-    const cwd = std.Io.Dir.cwd();
-    const file = try cwd.createFile("out.txt", .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(self.io, "out.txt", .{});
+    defer file.close(self.io);
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(self.io, &buffer);
 
@@ -291,6 +290,7 @@ pub fn startLogicalReplication(
                 std.debug.print("copy_format: {d}\n", .{copy_format});
                 const columns_number = try r.interface.takeInt(i16, .big);
                 var column_format_codes = try std.ArrayList(i16).initCapacity(self.allocator, @intCast(columns_number));
+                defer column_format_codes.deinit(self.allocator);
                 for (0..@intCast(columns_number)) |_| {
                     try column_format_codes.append(self.allocator, try r.interface.takeInt(i16, .big));
                 }
@@ -299,7 +299,7 @@ pub fn startLogicalReplication(
                 }
             },
             'd' => {
-                const inner_msg_type = try r.takeByte();
+                const inner_msg_type = try r.interface.takeByte();
                 std.debug.print("msg_type: {c}\n", .{inner_msg_type});
                 switch (inner_msg_type) {
                     'k' => {
@@ -307,6 +307,7 @@ pub fn startLogicalReplication(
                     },
                     'w' => {
                         try handleXLogData(self, payload_len - 1, &file_writer);
+                        try file_writer.interface.flush();
                     },
                     else => {
                         std.debug.print("Unsupported message type {c}\n", .{msg_type});
@@ -339,15 +340,93 @@ pub fn parseTupleData(
     writer: anytype,
 ) !void {
     var r = &self.reader;
+
     const columns_number = try r.interface.takeInt(i16, .big);
-    std.debug.print("columns_number: {d}\n", .{columns_number});
+
+    std.debug.print(
+        "columns_number: {d}\n",
+        .{columns_number},
+    );
+
     for (0..@intCast(columns_number)) |i| {
-        try writer.interface.print("    Tuple{d}\n", .{i});
-        try writer.interface.print("    Data format: {c}\n", .{try r.interface.takeByte()});
-        const value_len = try r.interface.takeInt(i32, .big);
-        try writer.interface.print("    Value: {any}\n", .{try r.interface.take(@intCast(value_len))});
+        try writer.interface.print(
+            "    Tuple{d}\n",
+            .{i},
+        );
+
+        const byte = try r.interface.takeByte();
+
+        std.debug.print("byte: {c}\n", .{byte});
+
+        try writer.interface.print(
+            "    Data format: {c}\n",
+            .{byte},
+        );
+
+        switch (byte) {
+            'n' => {
+                try writer.interface.print(
+                    "    Value: NULL\n",
+                    .{},
+                );
+            },
+
+            'u' => {
+                try writer.interface.print(
+                    "    Value: UNCHANGED TOAST\n",
+                    .{},
+                );
+            },
+
+            't' => {
+                const value_len: i32 =
+                    try r.interface.takeInt(i32, .big);
+
+                std.debug.print(
+                    "value_len: {d}\n",
+                    .{value_len},
+                );
+
+                const value =
+                    try r.interface.take(
+                        @intCast(value_len),
+                    );
+
+                try writer.interface.print(
+                    "    Value: {s}\n",
+                    .{value},
+                );
+            },
+
+            else => {
+                std.debug.print(
+                    "Unknown tuple data type: {c}\n",
+                    .{byte},
+                );
+
+                return error.UnknownTupleDataType;
+            },
+        }
     }
 }
+
+// pub fn parseTupleData(
+//     self: *Connection,
+//     writer: anytype,
+// ) !void {
+//     var r = &self.reader;
+//     const columns_number = try r.interface.takeInt(i16, .big);
+//     std.debug.print("columns_number: {d}\n", .{columns_number});
+//     for (0..@intCast(columns_number)) |i| {
+//         try writer.interface.print("    Tuple{d}\n", .{i});
+//         const byte = try r.interface.takeByte();
+//         std.debug.print("byte: {c}\n", .{byte});
+//         try writer.interface.print("    Data format: {c}\n", .{byte});
+//         const value_len: i32 = try r.interface.takeInt(i32, .big);
+//         std.debug.print("value_len: {d}\n", .{value_len});
+//         try writer.interface.print("    Value: {any}\n", .{try r.interface.take(@intCast(value_len))});
+//     }
+// }
 
 // LEAK? Probably no
 pub fn LsnToString(allocator: std.mem.Allocator, lsn: i64) ![]const u8 {
@@ -384,7 +463,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
         },
         'C' => {
             try writer.interface.writeAll("=Commit\n");
-            _ = try r.takeByte();
+            _ = try r.interface.takeByte();
             const commit_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
             try writer.interface.print("Commit LSN: {s}\n", .{commit_lsn});
             try writer.interface.print("Timestamp: {d}\n", .{try r.interface.takeInt(i64, .big)});
@@ -406,7 +485,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
             try writer.interface.print("Namespace: {s}\n", .{(try r.interface.takeDelimiter(0)).?});
             try writer.interface.print("Relation name: {s}\n", .{(try r.interface.takeDelimiter(0)).?});
             try writer.interface.print("Replica identity: {d}\n", .{try r.interface.takeInt(i8, .big)});
-            const columns_number = try r.takeInt(i16, .big);
+            const columns_number = try r.interface.takeInt(i16, .big);
             for (0..@intCast(columns_number)) |i| {
                 try writer.interface.print("Column{d}\n", .{i});
                 try writer.interface.print("    Column flags: {d}\n", .{try r.interface.takeInt(i8, .big)});
@@ -481,7 +560,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
             if (self.streaming) {
                 try writer.interface.print("Transaction id: {d}\n", .{try r.interface.takeInt(i32, .big)});
             }
-            const relations_number = try r.takeInt(i32, .big);
+            const relations_number = try r.interface.takeInt(i32, .big);
             try writer.interface.print("Option bits: {d}\n", .{try r.interface.takeInt(i32, .big)});
 
             for (0..@intCast(relations_number)) |_| {
@@ -503,7 +582,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
         'c' => {
             try writer.interface.writeAll("=Stream Commit\n");
             try writer.interface.print("Transaction xid: {d}\n", .{try r.interface.takeInt(i32, .big)});
-            _ = try r.takeByte();
+            _ = try r.interface.takeByte();
             const commit_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
             try writer.interface.print("Commit LSN: {s}\n", .{commit_lsn});
             const transaction_end_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
@@ -535,7 +614,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
         },
         'P' => {
             try writer.interface.writeAll("=Prepare\n");
-            _ = try r.takeByte();
+            _ = try r.interface.takeByte();
             const prepare_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
             try writer.interface.print("Prepare LSN: {s}\n", .{prepare_lsn});
             const transaction_end_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
@@ -547,7 +626,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
         },
         'K' => {
             try writer.interface.writeAll("=Commit Prepared\n");
-            _ = try r.takeByte();
+            _ = try r.interface.takeByte();
             const commit_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
             try writer.interface.print("Transaction commit LSN: {s}\n", .{commit_lsn});
             const commit_end_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
@@ -571,7 +650,7 @@ pub fn handleXLogData(self: *Connection, size: i32, writer: anytype) !void {
         },
         'p' => {
             try writer.interface.writeAll("=Stream Prepare\n");
-            _ = try r.takeByte();
+            _ = try r.interface.takeByte();
             const prepare_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));
             try writer.interface.print("Prepare LSN: {s}\n", .{prepare_lsn});
             const transaction_end_lsn = try LsnToString(self.allocator, try r.interface.takeInt(i64, .big));

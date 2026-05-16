@@ -63,17 +63,23 @@ pub fn main(init: std.process.Init) !void {
     // try options.append(allocator, .{.name = "proto_version", .value = "4"});
     // try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
     // try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
-    var file = try std.Io.Dir.cwd().createFile(io, "out.csv", .{});
-    defer file.close(io);
-    // const buf: []u8 = try conn.allocator.alloc(u8, 4096);
-    // defer conn.allocator.free(buf);
-
-    // var file = try std.fs.cwd().createFile("out.csv", .{});
-    var buf: [4096]u8 = undefined;
-
-    var writer = file.writer(io, &buf);
-    try copyToWriter(conn, "employee", &writer);
-
-    // var reader = file.reader(io, buf);
-    // try copyFromReader(conn, "employee", &reader);
+    var replication_conn = try Connection.connect(
+        gpa,
+        io,
+        "127.0.0.1",
+        5432,
+        "postgres",
+        "1",
+        "test",
+        "database",
+    );
+    defer {
+        replication_conn.close();
+        replication_conn.allocator.destroy(replication_conn);
+    }
+    var options = try std.ArrayList(PluginOption).initCapacity(replication_conn.allocator, 8);
+    defer options.deinit(replication_conn.allocator);
+    try options.append(replication_conn.allocator, .{ .name = "proto_version", .value = "4" });
+    try options.append(replication_conn.allocator, .{ .name = "publication_names", .value = "test_pub" });
+    try startLogicalReplication(replication_conn, "test_logical_slot", "0/0", &options);
 }

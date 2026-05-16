@@ -217,13 +217,13 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
             },
             'E' => {
                 var error_message = try buildMessage(a, r);
-                defer error_message.deinit(self.allocator);
+                defer error_message.deinit(a);
                 std.debug.print("{s}\n", .{error_message.items});
                 return error.ServerError;
             },
             'N' => {
                 var notice_message = try buildMessage(a, r);
-                defer notice_message.deinit(self.allocator);
+                defer notice_message.deinit(a);
                 std.debug.print("{s}\n", .{notice_message.items});
             },
             else => {

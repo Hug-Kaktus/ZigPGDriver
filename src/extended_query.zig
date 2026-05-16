@@ -58,7 +58,7 @@ pub const ParameterValue = struct {
 pub fn bindMsg(
     self: *Connection,
     destination_portal: []const u8,
-    source_prepared_statement: *const PreparedStatement,
+    source_prepared_statement: []const u8,
     parameter_format_codes: std.ArrayList(i16),
     parameter_values: std.ArrayList(ParameterValue),
     result_column_format_codes: std.ArrayList(i16),
@@ -66,7 +66,7 @@ pub fn bindMsg(
     try self.writer.interface.writeByte('B');
     const len = 4 +
         destination_portal.len + 1 +
-        source_prepared_statement.name.len + 1 +
+        source_prepared_statement.len + 1 +
         2 + parameter_format_codes.items.len * 2 +
         2 +
         blk: {
@@ -85,7 +85,7 @@ pub fn bindMsg(
     try self.writer.interface.writeInt(i32, @intCast(len), .big);
     try self.writer.interface.writeAll(destination_portal);
     try self.writer.interface.writeByte(0);
-    try self.writer.interface.writeAll(source_prepared_statement.name);
+    try self.writer.interface.writeAll(source_prepared_statement);
     try self.writer.interface.writeByte(0);
     try self.writer.interface.writeInt(i16, @intCast(parameter_format_codes.items.len), .big);
     for (parameter_format_codes.items) |code| {
@@ -287,7 +287,14 @@ pub fn executeQuery(
     try sync(self);
     var r = &self.reader;
 
-    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    const arena = try self.allocator.create(std.heap.ArenaAllocator);
+
+    errdefer self.allocator.destroy(arena);
+
+    arena.* = std.heap.ArenaAllocator.init(self.allocator);
+
+    errdefer arena.deinit();
+
     const a = arena.allocator();
     var rows = try std.ArrayList(Row).initCapacity(a, 8);
 
@@ -357,16 +364,34 @@ pub fn executeQueryTyped(
     };
 }
 
-pub fn sendStatement(self: *Connection, prepared_statement: PreparedStatement, params: std.ArrayList(ParameterValue)) !void {
+pub fn sendStatement(self: *Connection, prepared_statement: *PreparedStatement, params: std.ArrayList(ParameterValue)) !void {
     try bindMsg(
         self,
         "",
         prepared_statement.name,
-        std.ArrayList(i32).initCapacity(self.allocator, 0),
+        try std.ArrayList(i16).initCapacity(self.allocator, 0),
         params,
-        std.ArrayList(i16).initCapacity(self.allocator, 0),
+        try std.ArrayList(i16).initCapacity(self.allocator, 0),
     );
     try executeMsg(self, "", 0);
+
+    const pq = try self.allocator.create(PendingQuery);
+    errdefer self.allocator.destroy(pq);
+
+    const arena = try self.allocator.create(std.heap.ArenaAllocator);
+    errdefer self.allocator.destroy(arena);
+
+    arena.* = std.heap.ArenaAllocator.init(self.allocator);
+    errdefer arena.deinit();
+
+    pq.* = .{
+        .arena = arena,
+        .prepared_statement = prepared_statement,
+        .rows = std.ArrayList(Row).empty,
+        .state = .pending,
+        .error_message = null,
+    };
+    try self.pending.push(pq);
 }
 
 pub fn flushPipeline(self: *Connection) !void {
@@ -375,55 +400,62 @@ pub fn flushPipeline(self: *Connection) !void {
 
 pub fn readPipeline(self: *Connection) !void {
     var r = &self.reader;
-    var current_query_index = 0;
     var in_error_recovery = false;
-    while (current_query_index < self.pending.items.len) {
+    while (true) {
         const msg_type = try r.interface.takeByte();
-        const msg_len = try r.interface.takeInt(i32, .big);
+        const msg_len: usize = @intCast(try r.interface.takeInt(i32, .big));
 
         if (in_error_recovery) {
+            std.debug.print("is in error recovery =============\n", .{});
             if (msg_type == 'Z') {
                 _ = try r.interface.takeByte();
-                for (self.pending.items[current_query_index..]) |*q| {
-                    if (q.state == .pending) {
-                        q.state = .skipped;
-                    }
-                }
+                // for (self.pending.items[current_query_index..]) |q| {
+                //     if (q.state == .pending) {
+                //         q.state = .skipped;
+                //     }
+                // }
                 break;
             } else {
-                try r.interface.take(msg_len - 4);
+                _ = try r.interface.take(msg_len - 4);
                 continue;
             }
         }
 
-        var current = &self.pending.items[current_query_index];
+        const current = self.pending.peek() orelse {
+            return;
+        };
         switch (msg_type) {
-            '1' => try r.interface.take(msg_len - 4),
-            '2' => try r.interface.take(msg_len - 4),
+            '1' => _ = try r.interface.take(msg_len - 4),
+            '2' => _ = try r.interface.take(msg_len - 4),
             'D' => {
-                if (current.prepared_statement.fields) |f| {
-                    const row = try parseRowData(self, f.items);
-                    try current.rows.append(self.allocator, row);
-                } else {
-                    return error.ProtocolError;
-                }
+                const row = try parseRowData(
+                    self,
+                    current.arena.allocator(),
+                    current.prepared_statement.fields.items,
+                );
+                try current.rows.append(current.arena.allocator(), row);
             },
             'C' => {
-                try r.interface.take(msg_len - 4);
+                _ = try r.interface.take(msg_len - 4);
                 current.state = .done;
+                const pq = self.pending.pop() orelse continue;
+                try self.completed.push(pq);
             },
             'Z' => {
                 _ = try r.interface.takeByte();
                 if (current.state == .pending) {
                     current.state = .done;
                 }
-                current_query_index += 1;
+                return;
             },
             'E' => {
                 var error_message = try buildMessage(self.allocator, r);
                 defer error_message.deinit(self.allocator);
                 std.debug.print("{s}\n", .{error_message.items});
-                current.error_message = error_message.items;
+                current.error_message = try current.arena.allocator().dupe(
+                    u8,
+                    error_message.items,
+                );
                 current.state = .failed;
                 in_error_recovery = true;
             },
@@ -438,6 +470,13 @@ pub fn readPipeline(self: *Connection) !void {
             },
         }
     }
+}
+
+pub fn consume(self: *Connection) !*PendingQuery {
+    const pq = self.completed.pop() orelse {
+        return error.NoCompletedQueries;
+    };
+    return pq;
 }
 
 pub fn cancel(self: *Connection, process_id: i32, secret_key: []const u8) !void {
