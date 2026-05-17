@@ -113,31 +113,14 @@ test "create table" {
         \\);
     );
     query_result.deinit(conn.allocator);
-}
-
-test "salary" {
-    var conn = try Connection.connect(
-        std.testing.allocator,
-        std.testing.io,
-        "127.0.0.1",
-        5432,
-        "postgres",
-        "1",
-        "test",
-        "false",
-    );
-    defer {
-        conn.close();
-        std.testing.allocator.destroy(conn);
-    }
-    var query_result = try queryUntyped(conn,
+    var query_result2 = try queryUntyped(conn,
         \\ CREATE TABLE salary (
         \\ salary_id SERIAL PRIMARY KEY,
         \\ employee_id INT REFERENCES employee(employee_id),
         \\ amount INT NOT NULL
         \\ );
     );
-    defer query_result.deinit(conn.allocator);
+    defer query_result2.deinit(conn.allocator);
 }
 
 test "join" {
@@ -188,9 +171,9 @@ test "drop tables" {
         conn.close();
         std.testing.allocator.destroy(conn);
     }
-    var query_result = try queryUntyped(conn, "DROP TABLE IF EXISTS employee;");
-    var query_result2 = try queryUntyped(conn, "DROP TABLE IF EXISTS salary;");
+    var query_result = try queryUntyped(conn, "DROP TABLE IF EXISTS salary;");
     defer query_result.deinit(conn.allocator);
+    var query_result2 = try queryUntyped(conn, "DROP TABLE IF EXISTS employee;");
     defer query_result2.deinit(conn.allocator);
 }
 

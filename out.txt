@@ -1,0 +1,84 @@
+=Begin
+Transaction LSN: 0/22FEFF8
+Timestamp: 831989754375238
+Transaction id: 813
+=Relation
+Transaction id: 24666
+Relation OID: 1886741100
+Namespace: ic
+Relation name: employee
+Replica identity: 100
+Column0
+    Column flags: 1
+    Column name: employee_id
+    Column OID: 23
+    Type modifier: -1
+Column1
+    Column flags: 0
+    Column name: first_name
+    Column OID: 1043
+    Type modifier: 54
+Column2
+    Column flags: 0
+    Column name: last_name
+    Column OID: 1043
+    Type modifier: 54
+=Insert
+Relation OID: 24666
+    Tuple0
+    Data format: t
+    Value: 1
+    Tuple1
+    Data format: t
+    Value: Oleksandr
+    Tuple2
+    Data format: t
+    Value: Kovalskyi
+=Insert
+Relation OID: 24666
+    Tuple0
+    Data format: t
+    Value: 2
+    Tuple1
+    Data format: t
+    Value: Yana
+    Tuple2
+    Data format: t
+    Value: Kikh
+=Insert
+Relation OID: 24666
+    Tuple0
+    Data format: t
+    Value: 3
+    Tuple1
+    Data format: t
+    Value: Kyrylo
+    Tuple2
+    Data format: t
+    Value: Buherya
+=Insert
+Relation OID: 24666
+    Tuple0
+    Data format: t
+    Value: 4
+    Tuple1
+    Data format: t
+    Value: Viktoriia
+    Tuple2
+    Data format: t
+    Value: Polyakova
+=Insert
+Relation OID: 24666
+    Tuple0
+    Data format: t
+    Value: 5
+    Tuple1
+    Data format: t
+    Value: Artem
+    Tuple2
+    Data format: t
+    Value: Bondar
+=Commit
+Commit LSN: 0/22FEFF8
+Timestamp: 36696104
+End LSN: 2F4B0/B5C42C46

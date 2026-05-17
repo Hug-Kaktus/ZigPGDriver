@@ -193,7 +193,8 @@ pub fn queryUntyped(self: *Connection, sql: []const u8) !QueryResult {
             },
             'C' => {
                 const command_tag: []const u8 = (try r.interface.takeDelimiter(0)).?;
-                std.debug.print("{s}\n", .{command_tag});
+                _ = command_tag;
+                // std.debug.print("{s}\n", .{command_tag});
                 return QueryResult{
                     .arena = arena,
                     .fields = if (fields) |f| f else try std.ArrayList(FieldData).initCapacity(a, 0),

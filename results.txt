@@ -1,0 +1,11 @@
+copy in of 1000 * 100 entries: 141ms
+insert of 1000 * 100 entries: 375ms
+
+copy out of 1000 * 100 entries: 154ms
+select of 1000 * 100 entries no write to file: 17ms
+
+pipeline no allocations: 505ms
+comparison of select to pipeline no allocations: 1419ms
+
+pipeline with allocations: 425ms
+comparison of select to pipeline with allocations: 1385ms

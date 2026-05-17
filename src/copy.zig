@@ -4,6 +4,7 @@ const helpers = @import("helpers.zig");
 const buildMessage = helpers.buildMessage;
 const parseKeyValuePayload = helpers.parseKeyValuePayload;
 
+/// Copy from the client to the server.
 pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype) !void {
     try self.writer.interface.writeByte('Q');
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 128);
@@ -89,6 +90,7 @@ pub fn copyFromReader(self: *Connection, table_name: []const u8, reader: anytype
     }
 }
 
+/// Copy from the server to the client.
 pub fn copyToWriter(self: *Connection, table_name: []const u8, writer: anytype) !void {
     try self.writer.interface.writeByte('Q');
     var sql = try std.ArrayList(u8).initCapacity(self.allocator, 128);

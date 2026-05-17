@@ -10,6 +10,10 @@ const prepare = extended_query.prepare;
 const bindPreparedStatement = extended_query.bindPreparedStatement;
 const executeQuery = extended_query.executeQuery;
 const executeQueryTyped = extended_query.executeQueryTyped;
+const sendStatement = extended_query.sendStatement;
+const flushPipeline = extended_query.flushPipeline;
+const readPipeline = extended_query.readPipeline;
+const consume = extended_query.consume;
 const ParameterValue = extended_query.ParameterValue;
 
 const replication = @import("replication.zig");
@@ -47,39 +51,76 @@ pub fn main(init: std.process.Init) !void {
         conn.close();
         gpa.destroy(conn);
     }
-    // const Employee = struct {
-    //     employee_id: i32,
-    //     first_name: []const u8,
-    //     last_name: []const u8,
-    // };
-    // var employees_result = try queryTyped(conn, Employee, "SELECT employee_id, first_name, last_name FROM employee");
-    // defer employees_result.deinit();
+    const start = std.Io.Clock.awake.now(io);
+    // ================== BIG INSERT ==================
+    // var sql = try std.ArrayList(u8).initCapacity(conn.allocator, 2 * 1024 * 1024);
+    // defer sql.deinit(conn.allocator);
+    // try sql.print(conn.allocator, "INSERT INTO employee (first_name, last_name) VALUES\n", .{});
+    // const end = 1000 * 100 + 1;
+    // for (1..end) |i| {
+    //     if (i != end - 1) {
+    //         @branchHint(.likely);
+    //         try sql.print(conn.allocator, "('Test{d}', 'Test{d}'),\n", .{ i, i });
+    //     } else {
+    //         try sql.print(conn.allocator, "('Test{d}', 'Test{d}');", .{ i, i });
+    //     }
+    // }
+    // var query_result = try queryUntyped(conn, sql.items);
+    // defer query_result.deinit(conn.allocator);
 
-    // for (employees_result.rows.items) |e| {
-    //     std.debug.print("{d} {s} {s}\n", .{ e.employee_id, e.first_name, e.last_name });
+    // ================== BIG SELECT ==================
+    // var query_result = try queryUntyped(conn, "SELECT * FROM employee LIMIT 100000");
+    // defer query_result.deinit(conn.allocator);
+
+    // ================== COMPLEX QUERY USING SIMPLE QUERY PROTOCOL ==================
+    // ================== COMPLEX QUERY USING EXTENDED QUERY PROTOCOL ==================
+    // ================== PIPELINE ==================
+    // var param_types = try std.ArrayList(i32).initCapacity(conn.allocator, 4);
+    // try param_types.append(conn.allocator, 0);
+    // const stmt = try prepare(conn, "test_statement", "SELECT * FROM employee WHERE employee_id = $1", &param_types);
+    // defer stmt.deinit(conn.allocator);
+    // const end = 1000 * 100;
+    // for (1..end + 1) |i| {
+    //     var values = try std.ArrayList(ParameterValue).initCapacity(conn.allocator, 1);
+    //     defer values.deinit(conn.allocator);
+
+    //     var buf: [20]u8 = undefined;
+    //     const str = try std.fmt.bufPrint(&buf, "{d}", .{i});
+
+    //     try values.append(conn.allocator, ParameterValue{
+    //         .length = @intCast(str.len),
+    //         .value = str,
+    //     });
+
+    //     try sendStatement(conn, stmt, values);
+    // }
+    // try flushPipeline(conn);
+    // try readPipeline(conn);
+    // ================== COMPARISON TO PIPELINE ==================
+    // const end = 100000;
+    // var sql = try std.ArrayList(u8).initCapacity(conn.allocator, 64);
+    // defer sql.deinit(conn.allocator);
+    // for (1..end) |i| {
+    //     try sql.print(conn.allocator, "SELECT * FROM employee WHERE employee_id = {d}", .{i});
+    //     defer sql.clearRetainingCapacity();
+    //     var query_result = try queryUntyped(conn, sql.items);
+    //     defer query_result.deinit(conn.allocator);
     // }
 
-    // var options = try std.ArrayList(PluginOption).initCapacity(allocator, 8);
-    // try options.append(allocator, .{.name = "proto_version", .value = "4"});
-    // try options.append(allocator, .{.name = "publication_names", .value = "test_pub"});
-    // try startLogicalReplication(&replication_conn, "test_logical_slot", "0/0", options);
-    var replication_conn = try Connection.connect(
-        gpa,
-        io,
-        "127.0.0.1",
-        5432,
-        "postgres",
-        "1",
-        "test",
-        "database",
-    );
-    defer {
-        replication_conn.close();
-        replication_conn.allocator.destroy(replication_conn);
-    }
-    var options = try std.ArrayList(PluginOption).initCapacity(replication_conn.allocator, 8);
-    defer options.deinit(replication_conn.allocator);
-    try options.append(replication_conn.allocator, .{ .name = "proto_version", .value = "4" });
-    try options.append(replication_conn.allocator, .{ .name = "publication_names", .value = "test_pub" });
-    try startLogicalReplication(replication_conn, "test_logical_slot", "0/0", &options);
+    // ================== COPY OUT ==================
+    // var file = try std.Io.Dir.cwd().createFile(io, "out.csv", .{});
+    // defer file.close(io);
+    // var wbuf: [4096]u8 = undefined;
+    // var writer = file.writer(io, &wbuf);
+    // try copyToWriter(conn, "employee", &writer);
+
+    // ================== COPY IN ==================
+    // var file = try std.Io.Dir.cwd().openFile(io, "out.csv", .{});
+    // defer file.close(io);
+    // var rbuf: [4096]u8 = undefined;
+    // var reader = file.reader(io, &rbuf);
+    // try copyFromReader(conn, "employee", &reader);
+
+    const duration = start.untilNow(io, .awake);
+    std.debug.print("elapsed ms = {}\n", .{duration.toMilliseconds()});
 }

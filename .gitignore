@@ -3,4 +3,3 @@ zig-out
 *.exe
 *.lib
 *.pdb
-*.txt
