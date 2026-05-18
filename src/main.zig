@@ -67,13 +67,74 @@ pub fn main(init: std.process.Init) !void {
     // }
     // var query_result = try queryUntyped(conn, sql.items);
     // defer query_result.deinit(conn.allocator);
+    // ================== BIG SALARY INSERT ==================
+    // var seed: u64 = undefined;
+    // try init.io.randomSecure(std.mem.asBytes(&seed));
+
+    // var prng = std.Random.DefaultPrng.init(seed);
+    // const rand = prng.random();
+
+    // var sql = try std.ArrayList(u8).initCapacity(conn.allocator, 2 * 1024 * 1024);
+    // defer sql.deinit(conn.allocator);
+    // try sql.print(conn.allocator, "INSERT INTO salary (employee_id, amount) VALUES\n", .{});
+    // const end = 1000 * 100 + 1;
+    // for (1..end) |i| {
+    //     const id = rand.intRangeAtMost(i32, 1, 100000);
+    //     const salary = rand.intRangeAtMost(i32, 10000, 100000);
+    //     if (i != end - 1) {
+    //         @branchHint(.likely);
+    //         try sql.print(conn.allocator, "({d}, {d}),\n", .{ id, salary });
+    //     } else {
+    //         try sql.print(conn.allocator, "({d}, {d});", .{ id, salary });
+    //     }
+    // }
+    // var query_result = try queryUntyped(conn, sql.items);
+    // defer query_result.deinit(conn.allocator);
 
     // ================== BIG SELECT ==================
     // var query_result = try queryUntyped(conn, "SELECT * FROM employee LIMIT 100000");
     // defer query_result.deinit(conn.allocator);
-
     // ================== COMPLEX QUERY USING SIMPLE QUERY PROTOCOL ==================
+    // const end = 100 * 1 + 1;
+    // for (0..end) |_| {
+    //     var query_result = try queryUntyped(conn,
+    //         \\ SELECT
+    //         \\     e.first_name,
+    //         \\     e.last_name,
+    //         \\     s.amount AS annual_salary
+    //         \\ FROM employee e
+    //         \\ JOIN salary s ON e.employee_id = 50;
+    //     );
+    //     defer query_result.deinit(conn.allocator);
+    // }
+
     // ================== COMPLEX QUERY USING EXTENDED QUERY PROTOCOL ==================
+    // const end = 100 * 1 + 1;
+    // var param_types = std.ArrayList(i32).empty;
+    // var prepared_statement = try prepare(
+    //     conn,
+    //     "test",
+    //     "SELECT e.first_name, e.last_name, s.amount AS annual_salary FROM employee e JOIN salary s ON e.employee_id = 50;",
+    //     &param_types,
+    // );
+    // defer prepared_statement.deinit(conn.allocator);
+    // for (0..end) |_| {
+    //     var parameter_format_codes = std.ArrayList(i16).empty;
+    //     defer parameter_format_codes.deinit(conn.allocator);
+
+    //     var values = std.ArrayList(ParameterValue).empty;
+    //     defer values.deinit(conn.allocator);
+
+    //     var result_format_codes = std.ArrayList(i16).empty;
+    //     defer result_format_codes.deinit(conn.allocator);
+
+    //     const binded_prepared_statement = try bindPreparedStatement(conn, "test_portal_name", prepared_statement, parameter_format_codes, values, result_format_codes);
+    //     defer conn.allocator.destroy(binded_prepared_statement);
+
+    //     var query_result = try executeQuery(conn, binded_prepared_statement, 0);
+    //     defer query_result.deinit(conn.allocator);
+    // }
+
     // ================== PIPELINE ==================
     // var param_types = try std.ArrayList(i32).initCapacity(conn.allocator, 4);
     // try param_types.append(conn.allocator, 0);
@@ -110,9 +171,23 @@ pub fn main(init: std.process.Init) !void {
     // ================== COPY OUT ==================
     // var file = try std.Io.Dir.cwd().createFile(io, "out.csv", .{});
     // defer file.close(io);
-    // var wbuf: [4096]u8 = undefined;
+    // var wbuf: [8192]u8 = undefined;
     // var writer = file.writer(io, &wbuf);
     // try copyToWriter(conn, "employee", &writer);
+    // ================== SELECT AND WRITE TO FILE ==================
+    // var result = try queryUntyped(conn, "SELECT employee_id, first_name, last_name FROM employee");
+    // defer result.deinit(conn.allocator);
+    // var file = try std.Io.Dir.cwd().createFile(io, "out.csv", .{});
+    // defer file.close(io);
+    // var wbuf: [8192]u8 = undefined;
+    // var writer = file.writer(io, &wbuf);
+
+    // for (result.rows.items) |row| {
+    //     const id = try row.getAs(i32, result.fields.items, "employee_id");
+    //     const first_name = try row.getAs([]const u8, result.fields.items, "first_name");
+    //     const last_name = try row.getAs([]const u8, result.fields.items, "last_name");
+    //     try writer.interface.print("{d},{s},{s}\n", .{ id, first_name, last_name });
+    // }
 
     // ================== COPY IN ==================
     // var file = try std.Io.Dir.cwd().openFile(io, "out.csv", .{});

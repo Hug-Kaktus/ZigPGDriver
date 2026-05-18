@@ -111,7 +111,7 @@ pub fn bindPreparedStatement(
     parameter_values: std.ArrayList(ParameterValue),
     result_column_format_codes: std.ArrayList(i16),
 ) !*BindedPreparedStatement {
-    try bindMsg(self, destination_portal, source_prepared_statement, parameter_format_codes, parameter_values, result_column_format_codes);
+    try bindMsg(self, destination_portal, source_prepared_statement.name, parameter_format_codes, parameter_values, result_column_format_codes);
     try flush(self);
     var r = &self.reader;
     while (true) {

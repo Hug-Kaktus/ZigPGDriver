@@ -9,3 +9,9 @@ comparison of select to pipeline no allocations: 1419ms
 
 pipeline with allocations: 425ms
 comparison of select to pipeline with allocations: 1385ms
+
+join with extended query protocol: 419ms
+join with simple query protocol: 256ms
+
+join with extended query protocol fixed param: 180ms
+join with simple query protocol fixed param: 99ms

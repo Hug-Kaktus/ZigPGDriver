@@ -90,7 +90,7 @@ test "simple query typed" {
     }
 }
 
-test "create table" {
+test "create tables" {
     var conn = try Connection.connect(
         std.testing.allocator,
         std.testing.io,
@@ -299,6 +299,7 @@ test "extended query untyped" {
 
     const binded_prepared_statement = try bindPreparedStatement(conn, "test_portal_name", prepared_statement, parameter_format_codes, values, result_format_codes);
     defer conn.allocator.destroy(binded_prepared_statement);
+    binded_prepared_statement.show();
 
     var query_result = try executeQuery(conn, binded_prepared_statement, 0);
     defer query_result.deinit(conn.allocator);
