@@ -63,6 +63,7 @@ test "simple query untyped" {
 
 test "simple query typed" {
     var conn = try Connection.connect(
+        1,
         std.testing.allocator,
         std.testing.io,
         "127.0.0.1",
