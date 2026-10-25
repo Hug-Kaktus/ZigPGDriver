@@ -45,6 +45,8 @@ pub const Connection = struct {
     secret_key_len: i32,
     secret_key: [256]u8,
     backend_key_data: BackendKeyData,
+    closed: bool,
+    broken: bool,
 
     streaming: bool,
     parallel: bool,
@@ -103,6 +105,36 @@ pub const Connection = struct {
         try startup(connection, user, password, database, replication);
         return connection;
     }
+
+    /// Begins the transaction
+    pub fn begin(self: *Connection) !void {}
+
+    /// Commits pending transactions to the database
+    pub fn commit(self: *Connection) !void {}
+
+    /// Roll back to the start of any pending transaction
+    pub fn rollback(self: *Connection) !void {}
+
+    pub const TransactionStatus = enum {
+        not_started,
+        active,
+        commited,
+        rolled_back_explicitly,
+        rolled_back_with_error,
+        failed,
+    };
+
+    pub const Transaction = struct {
+        connection: *Connection,
+        savepoint_name: []const u8,
+        status: TransactionStatus,
+    };
+
+    pub fn transaction(
+        self: *Connection,
+        savepoint_name: []const u8,
+        force_rollback: bool,
+    ) !Transaction {}
 
     pub fn isAlive(self: *Connection) !bool {
         try self.writer.interface.writeByte('Q');
